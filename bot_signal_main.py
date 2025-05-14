@@ -77,8 +77,8 @@ def calculate_indicators(klines):
 
     try:
         macd_df = ta.macd(df["close"], fast=12, slow=26, signal=9).dropna()
-        if not {'MACD', 'MACDs'}.issubset(macd_df.columns):
-            raise ValueError(f"MACD calculation returned columns: {macd_df.columns.tolist()}")
+        macd_col = 'MACD_12_26_9'
+        macd_signal_col = 'MACDs_12_26_9'
 
         rsi = ta.rsi(df["close"], length=14).dropna()
         ema = ta.ema(df["close"], length=21).dropna()
@@ -86,8 +86,8 @@ def calculate_indicators(klines):
         stoch = ta.stoch(df["high"], df["low"], df["close"], fastk=14, slowk=3, slowd=3).dropna()
 
         return {
-            "macd": macd_df["MACD"].iloc[-1],
-            "macd_signal": macd_df["MACDs"].iloc[-1],
+            "macd": macd_df[macd_col].iloc[-1],
+            "macd_signal": macd_df[macd_signal_col].iloc[-1],
             "rsi": rsi.iloc[-1],
             "ema": ema.iloc[-1],
             "upperband": bbands["BBU_20_2.0"].iloc[-1],
