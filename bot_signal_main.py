@@ -1,11 +1,14 @@
+from flask import Flask
 import os
 import time
+import hmac
+import hashlib
 import requests
-from flask import Flask
+import json
 import pandas as pd
+from dotenv import load_dotenv
 from ta.momentum import RSIIndicator, WilliamsRIndicator
 from ta.trend import MACD, EMAIndicator
-from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -16,7 +19,6 @@ TELEGRAM_CHAT_ID = "557172438"
 
 symbols = ["BTC-USDT", "TIA-USDT", "PEOPLE-USDT", "POPCAT-USDT", "DOGE-USDT"]
 base_url = "https://open-api.bingx.com/openApi/swap/quote/v1/kline"
-price_url = "https://open-api.bingx.com/openApi/swap/quote/v1/ticker/price"  # Используем BingX для получения текущих цен
 
 headers = {
     "X-BX-APIKEY": API_KEY
@@ -60,16 +62,6 @@ def get_levels(df):
     support = min(low[-20:])
     return resistance, support
 
-def get_current_prices():
-    prices = {}
-    for symbol in symbols:
-        params = {"symbol": symbol.replace("-", "")}
-        response = requests.get(price_url, headers=headers, params=params)
-        data = response.json()
-        if "data" in data and "price" in data["data"]:
-            prices[symbol] = float(data["data"]["price"])
-    return prices
-
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
@@ -82,6 +74,22 @@ def send_telegram_message(message):
         print(f"Сообщение отправлено: {message}")
     except requests.exceptions.RequestException as e:
         print(f"Ошибка отправки сообщения в Telegram: {e}")
+
+def get_current_prices():
+    prices = {}
+    for symbol in symbols:
+        params = {
+            "symbol": symbol,
+            "interval": "1m",
+            "limit": 1
+        }
+        signed = sign_request(params.copy())
+        res = requests.get(base_url, headers=headers, params=signed)
+        data = res.json()["data"]
+        if data:
+            current_price = data[0]["close"]
+            prices[symbol] = float(current_price)
+    return prices
 
 def analyze_symbol(symbol):
     raw = get_kline(symbol)
@@ -113,28 +121,27 @@ def analyze_symbol(symbol):
             f"MACD: {macd:.4f}, RSI: {rsi:.2f}, WR: {wr:.2f}, EMA: {ema:.2f}"
         )
         send_telegram_message(msg)
-    return signal
+
+def send_no_trade_message():
+    prices = get_current_prices()
+    message = "Точек входа нет на данный момент. Текущие цены:\n"
+    for symbol, price in prices.items():
+        message += f"{symbol}: {price:.2f} USDT\n"
+    send_telegram_message(message)
 
 @app.route('/start_bot')
 def start_bot():
     while True:
-        prices = get_current_prices()
-        signal_found = False
+        trade_found = False
         for symbol in symbols:
             try:
-                signal = analyze_symbol(symbol)
-                if signal:
-                    signal_found = True
+                analyze_symbol(symbol)
+                trade_found = True
             except Exception as e:
                 print(f"Ошибка для {symbol}: {e}")
-        
-        if not signal_found:
-            prices_str = "\n".join([f"{symbol}: {price:.2f}" for symbol, price in prices.items()])
-            message = f"Нет точек входа на данный момент. Текущие цены:\n{prices_str}"
-            send_telegram_message(message)
-
-        time.sleep(1800)  # Пауза в 30 минут
-
+        if not trade_found:
+            send_no_trade_message()
+        time.sleep(1800)  # каждые 30 минут
     return "Bot started!"
 
 if __name__ == '__main__':
