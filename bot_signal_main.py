@@ -21,9 +21,20 @@ logging.basicConfig(level=logging.INFO)
 
 def get_klines(symbol):
     url = f"{BASE_URL}?symbol={symbol.upper()}&interval={INTERVAL}&limit={LIMIT}"
-    res = requests.get(url)
-    if res.status_code != 200:
-        logging.warning(f"Ошибка запроса {symbol}")
+    try:
+        res = requests.get(url, timeout=10)
+        res.raise_for_status()
+        df = pd.DataFrame(res.json(), columns=[
+            "timestamp", "open", "high", "low", "close", "volume",
+            "close_time", "quote_asset_volume", "number_of_trades",
+            "taker_buy_base_vol", "taker_buy_quote_vol", "ignore"
+        ])
+        df["close"] = pd.to_numeric(df["close"])
+        df["high"] = pd.to_numeric(df["high"])
+        df["low"] = pd.to_numeric(df["low"])
+        return df
+    except Exception as e:
+        logging.warning(f"Ошибка запроса {symbol}: {e}")
         return None
     df = pd.DataFrame(res.json(), columns=[
         "timestamp", "open", "high", "low", "close", "volume",
