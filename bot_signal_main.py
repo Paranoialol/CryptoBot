@@ -5,6 +5,7 @@ import hashlib
 import threading
 import requests
 import json
+from urllib.parse import urlencode
 from flask import Flask
 
 API_KEY = os.getenv("BINGX_API_KEY")
@@ -36,11 +37,16 @@ def get_kline(symbol, interval="1m", limit=2):
     try:
         signed = sign_request(params.copy())
         url = f"{base_url}{path}?{urlencode(signed)}"
+        print(f"[Отправка запроса] {url}")  # Логируем URL запроса
         res = requests.get(url, headers=headers)
         res.raise_for_status()
-        data = res.json().get("data", [])
-        print(f"[API Response] {symbol}: {data}")
-        return data
+        response_data = res.json()
+        print(f"[Ответ от API] {response_data}")  # Логируем ответ от API
+        if 'data' in response_data and response_data['data']:
+            return response_data['data']
+        else:
+            print(f"[Ответ от API] Нет данных для {symbol}")
+            return []
     except Exception as e:
         print(f"[Ошибка get_kline] {symbol}: {e}")
         return []
