@@ -78,6 +78,10 @@ def send_telegram_message(message):
         print("Ошибка при отправке:", e)
 
 def start_bot():
+    # Отправляем первое сообщение сразу после старта
+    msg = "Бот запущен и начинает мониторинг."
+    send_telegram_message(msg)
+
     while True:
         any_signals = False
         for symbol in symbols:
