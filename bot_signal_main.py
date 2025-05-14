@@ -61,7 +61,12 @@ def send_telegram_message(message):
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message
     }
-    requests.post(url, data=payload)
+    try:
+        response = requests.post(url, data=payload)
+        response.raise_for_status()  # Если API вернет ошибку, мы её поймаем
+        print(f"Сообщение отправлено: {message}")
+    except requests.exceptions.RequestException as e:
+        print(f"Ошибка отправки сообщения в Telegram: {e}")
 
 def analyze_symbol(symbol):
     raw = get_kline(symbol)
