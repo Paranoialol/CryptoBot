@@ -1,49 +1,62 @@
-import time
-import hashlib
-import hmac
 import os
+import time
+import hmac
+import hashlib
 import requests
 
-# Получаем ключи из переменных окружения
-API_KEY = os.getenv('BINGX_API_KEY')  # API_KEY
-API_SECRET = os.getenv('BINGX_API_SECRET')  # API_SECRET
+# Получение ключей из переменных окружения (Render)
+API_KEY = os.environ.get('BINGX_API_KEY')
+SECRET_KEY = os.environ.get('BINGX_API_SECRET')
 
-# URL для API
-url = 'https://api.bingx.com/api/v1/futures/market/candles'
+# Список монет, которые ты отслеживаешь
+symbols = ['BTC-USDT', 'ETH-USDT', 'TIA-USDT', 'POPCAT-USDT', 'PEOPLE-USDT']
 
-# Параметры запроса
-params = {
-    'symbol': 'btcusdt',  # Символ монеты
-    'interval': '1m',     # Интервал
-    'limit': 100          # Лимит данных
-}
+# Базовый URL для получения цен
+BASE_URL = 'https://open-api.bingx.com/openApi/swap/v2/quote/price'
 
-# Время запроса в миллисекундах
-timestamp = str(int(time.time() * 1000))
+def get_signature(params: dict, secret_key: str) -> str:
+    # Склеиваем параметры без сортировки (по документации BingX)
+    query = '&'.join([f'{key}={value}' for key, value in params.items()])
+    return hmac.new(secret_key.encode(), query.encode(), hashlib.sha256).hexdigest()
 
-# Формируем строку для подписи
-query_string = f"symbol={params['symbol']}&interval={params['interval']}&limit={params['limit']}&timestamp={timestamp}"
+def get_price(symbol: str):
+    timestamp = str(int(time.time() * 1000))
+    params = {
+        'symbol': symbol,
+        'timestamp': timestamp,
+        'recvWindow': '5000'
+    }
+    # Подпись параметров
+    signature = get_signature(params, SECRET_KEY)
+    params['signature'] = signature
 
-# Подпись
-signature = hmac.new(
-    API_SECRET.encode('utf-8'),
-    query_string.encode('utf-8'),
-    hashlib.sha256
-).hexdigest()
+    headers = {
+        'X-BX-APIKEY': API_KEY
+    }
 
-# Заголовки с API ключом и подписью
-headers = {
-    'X-BX-APIKEY': API_KEY  # Используем API ключ в заголовке
-}
+    try:
+        response = requests.get(BASE_URL, headers=headers, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('code') == 0 and 'data' in data:
+                return data['data']['price']
+            else:
+                print(f"[API ERROR] {symbol}: {data.get('msg')}")
+        else:
+            print(f"[HTTP ERROR] {symbol}: Status {response.status_code}")
+    except Exception as e:
+        print(f"[EXCEPTION] {symbol}: {e}")
+    return None
 
-# Добавляем подпись в параметры запроса
-params['timestamp'] = timestamp
-params['signature'] = signature
+def main():
+    print("=== Актуальные цены на BingX ===")
+    for symbol in symbols:
+        price = get_price(symbol)
+        if price:
+            print(f"{symbol}: {price} USDT")
+        else:
+            print(f"{symbol}: не удалось получить цену")
+        time.sleep(0.3)  # задержка, чтобы не спамить API
 
-# Отправляем запрос
-response = requests.get(url, params=params, headers=headers)
-
-if response.status_code == 200:
-    print(response.json())  # Выводим результат
-else:
-    print(f"Error: {response.status_code} - {response.text}")
+if __name__ == '__main__':
+    main()
