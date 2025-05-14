@@ -5,6 +5,8 @@ import hashlib
 import threading
 import requests
 import json
+import talib as ta
+import numpy as np
 from urllib.parse import urlencode
 from flask import Flask
 
@@ -26,7 +28,7 @@ def sign_request(params):
     params["signature"] = signature
     return params
 
-def get_kline(symbol, interval="1m", limit=2):
+def get_kline(symbol, interval="1m", limit=200):
     path = '/openApi/swap/v3/quote/klines'  # Новый путь для получения данных
     params = {
         "symbol": symbol,
@@ -38,65 +40,70 @@ def get_kline(symbol, interval="1m", limit=2):
         signed = sign_request(params.copy())
         url = f"{base_url}{path}?{urlencode(signed)}"
         res = requests.get(url, headers=headers)
-        res.raise_for_status()  # Проверка на ошибки запроса
+        res.raise_for_status()
         response_data = res.json()
 
         if 'data' in response_data and response_data['data']:
             return response_data['data']
         else:
+            print(f"[Ответ от API] Нет данных для {symbol}")
             return []
     except Exception as e:
         print(f"[Ошибка get_kline] {symbol}: {e}")
         return []
 
-def calculate_tp_sl(current_price, position_type="long"):
-    # Простейшие расчёты для TP и SL (можно усложнить)
-    sl_percentage = 0.02  # 2% стоп-лосс
-    tp_percentage = 0.05  # 5% тейк-профит
-    
-    if position_type == "long":
-        sl = current_price * (1 - sl_percentage)
-        tp = current_price * (1 + tp_percentage)
-    else:
-        sl = current_price * (1 + sl_percentage)
-        tp = current_price * (1 - tp_percentage)
+def calculate_indicators(klines):
+    closes = np.array([float(kline["close"]) for kline in klines])
+    opens = np.array([float(kline["open"]) for kline in klines])
+    highs = np.array([float(kline["high"]) for kline in klines])
+    lows = np.array([float(kline["low"]) for kline in klines])
+    volumes = np.array([float(kline["volume"]) for kline in klines])
 
-    return round(sl, 5), round(tp, 5)
+    # MACD
+    macd, macd_signal, _ = ta.MACD(closes, fastperiod=12, slowperiod=26, signalperiod=9)
 
-def get_price_change(symbol):
+    # RSI
+    rsi = ta.RSI(closes, timeperiod=14)
+
+    # EMA
+    ema = ta.EMA(closes, timeperiod=21)
+
+    # Bollinger Bands
+    upperband, middleband, lowerband = ta.BBANDS(closes, timeperiod=20, nbdevup=2, nbdevdn=2, matype=0)
+
+    # Stochastic Oscillator
+    slowk, slowd = ta.STOCH(highs, lows, closes, fastk_period=14, slowk_period=3, slowk_matype=0, slowd_period=3, slowd_matype=0)
+
+    return {
+        "macd": macd[-1],
+        "macd_signal": macd_signal[-1],
+        "rsi": rsi[-1],
+        "ema": ema[-1],
+        "upperband": upperband[-1],
+        "lowerband": lowerband[-1],
+        "slowk": slowk[-1],
+        "slowd": slowd[-1],
+        "volume": volumes[-1],
+        "ema_previous": ema[-2],  # предыдущий EMA для сравнения
+        "volume_previous": volumes[-2]  # предыдущий объем
+    }
+
+def get_signal(symbol):
     klines = get_kline(symbol, "1m")
-    if len(klines) >= 2:
-        last = float(klines[0]["close"])
-        prev = float(klines[1]["close"])
-        diff = last - prev
-        
-        if diff > 0:
-            color = "🟢"
-        elif diff < 0:
-            color = "🔴"
+    if len(klines) >= 200:
+        indicators = calculate_indicators(klines)
+
+        # Условия для анализа тренда на основе MACD, RSI, EMA и объемов
+        if indicators["macd"] > indicators["macd_signal"] and indicators["rsi"] < 30 and indicators["volume"] > indicators["volume_previous"]:
+            if indicators["ema"] < indicators["ema_previous"]:
+                return f"🔵 {symbol.replace('-USDT','')}: Лонг\nTP: {round(indicators['ema'] * 1.03, 5)}, SL: {round(indicators['ema'] * 0.97, 5)}"
+        elif indicators["macd"] < indicators["macd_signal"] and indicators["rsi"] > 70 and indicators["volume"] > indicators["volume_previous"]:
+            if indicators["ema"] > indicators["ema_previous"]:
+                return f"🔴 {symbol.replace('-USDT','')}: Шорт\nTP: {round(indicators['ema'] * 0.97, 5)}, SL: {round(indicators['ema'] * 1.03, 5)}"
         else:
-            color = "⚪"
-        
-        return last, f"{color} {symbol.replace('-USDT','')}: {last:.5f}"
-    
-    return None, f"⚠️ {symbol.replace('-USDT','')}: данных нет"
+            return f"⚪ {symbol.replace('-USDT','')}: Нет сигнала"
 
-def analyze(symbol):
-    # Простейший анализ (можно добавить MACD, RSI, EMA и другие индикаторы)
-    current_price, price_message = get_price_change(symbol)
-    if current_price is None:
-        return price_message
-
-    # Пример анализа: в зависимости от цены решаем, лонг или шорт
-    if current_price > 100:  # Примерный порог для лонга
-        position_type = "long"
-    else:
-        position_type = "short"
-    
-    # Вычисляем TP и SL
-    sl, tp = calculate_tp_sl(current_price, position_type)
-    
-    return f"{price_message}\nРекомендуемый вход: {position_type.capitalize()}.\nTP: {tp}, SL: {sl}"
+    return f"⚠️ {symbol.replace('-USDT','')}: Недостаточно данных"
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -113,17 +120,16 @@ def start_bot():
         any_signals = False
         for symbol in symbols:
             try:
-                signal = analyze(symbol)
-                send_telegram_message(signal)
-                any_signals = True
+                signal = get_signal(symbol)
+                if "данных нет" not in signal:
+                    send_telegram_message(signal)  # Если есть данные — отправляем в Telegram
+                    any_signals = True
             except Exception as e:
                 print(f"[Ошибка при анализе {symbol}] {e}")
-        
         if not any_signals:
-            msg = "Бот работает. Пока точек входа не найдено.\nТекущие цены:\n" + "\n".join([analyze(sym) for sym in symbols])
+            msg = "Бот работает. Пока точек входа не найдено.\nТекущие цены:\n" + "\n".join([get_signal(sym) for sym in symbols])
             send_telegram_message(msg)
-        
-        time.sleep(1800)  # Проверка каждые 30 минут
+        time.sleep(300)
 
 @app.route('/')
 def home():
