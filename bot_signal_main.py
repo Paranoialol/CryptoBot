@@ -8,9 +8,9 @@ from ta.momentum import RSIIndicator, WilliamsRIndicator
 from ta.trend import MACD
 
 # Настройки
+API_KEY = "0Ctrf2ZFCqYZuVxZJrjvlZExzuF23RFjZ2eOkleKjnWXaynPS3IQqBZiCEXyiqiNebYkXWBbSbjLnIHXbGDw"  # Вставь сюда свой ключ API
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 USER_CHAT_ID = os.getenv("USER_CHAT_ID")
-API_KEY = os.getenv("BINGX_API_KEY")  # Добавь сюда свой API ключ BingX
 SYMBOLS = ["dogeusdt", "pepeusdt", "peopleusdt", "btcusdt", "ethusdt"]
 INTERVAL = "1m"
 LIMIT = 100
@@ -20,34 +20,23 @@ bot = Bot(token=TELEGRAM_TOKEN)
 logging.basicConfig(level=logging.INFO)
 
 def get_klines(symbol):
+    url = f"{BASE_URL}?symbol={symbol.upper()}&interval={INTERVAL}&limit={LIMIT}"
     headers = {
-        "X-BingX-API-KEY": API_KEY  # Заголовок для авторизации
+        'Authorization': f'Bearer {API_KEY}'  # Добавь заголовок с авторизацией, если это требуется в API
     }
-    params = {
-        "symbol": symbol,
-        "interval": INTERVAL,
-        "limit": LIMIT
-    }
-    try:
-        res = requests.get(BASE_URL, params=params, headers=headers, timeout=10)
-        res.raise_for_status()  # Генерирует исключение при статусе 4xx или 5xx
-        data = res.json().get("data", [])
-        if not data:
-            logging.warning(f"Ошибка запроса {symbol}: Пустые данные")
-            return None
-        df = pd.DataFrame(data)
-        if df.shape[1] == 6:
-            df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
-        else:
-            logging.warning(f"Неподдерживаемый формат данных: {df.shape}")
-            return None
-        df["close"] = pd.to_numeric(df["close"])
-        df["high"] = pd.to_numeric(df["high"])
-        df["low"] = pd.to_numeric(df["low"])
-        return df
-    except requests.exceptions.RequestException as e:
-        logging.warning(f"Ошибка запроса {symbol}: {e}")
+    res = requests.get(url, headers=headers)
+    if res.status_code != 200:
+        logging.warning(f"Ошибка запроса {symbol}: {res.status_code}")
         return None
+    df = pd.DataFrame(res.json(), columns=[
+        "timestamp", "open", "high", "low", "close", "volume",
+        "close_time", "quote_asset_volume", "number_of_trades",
+        "taker_buy_base_vol", "taker_buy_quote_vol", "ignore"
+    ])
+    df["close"] = pd.to_numeric(df["close"])
+    df["high"] = pd.to_numeric(df["high"])
+    df["low"] = pd.to_numeric(df["low"])
+    return df
 
 def analyze(df):
     df["rsi"] = RSIIndicator(df["close"]).rsi()
