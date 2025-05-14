@@ -1,44 +1,39 @@
-import logging
 import os
 import time
+import logging
 import requests
-import pandas as pd
 from telegram import Bot
 from ta.momentum import RSIIndicator, WilliamsRIndicator
 from ta.trend import MACD
+import pandas as pd
 
 # Настройки
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 USER_CHAT_ID = os.getenv("USER_CHAT_ID")
 SYMBOLS = ["DOGE-USDT", "PEPE-USDT", "PEOPLE-USDT", "BTC-USDT", "ETH-USDT"]
-INTERVAL = "1"  # 1-минутный
+INTERVAL = "1m"
 LIMIT = 100
-BASE_URL = "https://open-api.bingx.com/openApi/swap/v2/quote/klines"
+BASE_URL = "https://open-api.bingx.com/openApi/quote/v1/klines"
 
 bot = Bot(token=TELEGRAM_TOKEN)
 logging.basicConfig(level=logging.INFO)
 
 def get_klines(symbol):
-    try:
-        res = requests.get(
-            BASE_URL,
-            params={"symbol": symbol, "interval": INTERVAL, "limit": LIMIT},
-            timeout=10
-        )
-        res.raise_for_status()
-        data = res.json().get("data", [])
-        if not data:
-            raise ValueError("Пустые данные")
-
-        df = pd.DataFrame(data)
-        df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
-        df["close"] = pd.to_numeric(df["close"])
-        df["high"] = pd.to_numeric(df["high"])
-        df["low"] = pd.to_numeric(df["low"])
-        return df
-    except Exception as e:
-        logging.warning(f"Ошибка запроса {symbol}: {e}")
+    url = f"{BASE_URL}?symbol={symbol}&interval={INTERVAL}&limit={LIMIT}"
+    res = requests.get(url)
+    if res.status_code != 200:
+        logging.warning(f"Ошибка запроса {symbol}: {res.status_code}")
         return None
+    data = res.json()
+    if not data.get("data"):
+        logging.warning(f"Ошибка запроса {symbol}: Пустые данные")
+        return None
+    df = pd.DataFrame(data["data"])
+    df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
+    df["close"] = pd.to_numeric(df["close"])
+    df["high"] = pd.to_numeric(df["high"])
+    df["low"] = pd.to_numeric(df["low"])
+    return df
 
 def analyze(df):
     df["rsi"] = RSIIndicator(df["close"]).rsi()
@@ -72,7 +67,7 @@ def format_message(symbol, signal, data):
     tp = round(entry * (1.02 if signal == "LONG" else 0.98), 6)
     sl = round(entry * (0.99 if signal == "LONG" else 1.01), 6)
     direction = "вверх" if data["macd"] > data["macd_signal"] else "вниз"
-
+    
     msg = (
         f"Монета: {symbol.replace('-USDT', '')}\n"
         f"Сигнал: {signal}\n"
