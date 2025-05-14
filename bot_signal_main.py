@@ -5,10 +5,7 @@ import hashlib
 import threading
 import requests
 import json
-import pandas as pd
 from flask import Flask
-from ta.momentum import RSIIndicator, WilliamsRIndicator
-from ta.trend import MACD, EMAIndicator
 
 API_KEY = os.getenv("BINGX_API_KEY")
 API_SECRET = os.getenv("BINGX_API_SECRET")
@@ -16,7 +13,7 @@ TELEGRAM_TOKEN = "8031738383:AAE3zxHvhSFhbTESh0dxEPaoODCrPnuOIxw"
 TELEGRAM_CHAT_ID = "557172438"
 
 symbols = ["BTC-USDT", "TIA-USDT", "PEOPLE-USDT", "POPCAT-USDT", "DOGE-USDT"]
-base_url = "https://open-api.bingx.com/openApi/swap/quote/v1/kline"
+base_url = "https://open-api.bingx.com"
 headers = {"X-BX-APIKEY": API_KEY}
 
 app = Flask(__name__)
@@ -28,14 +25,20 @@ def sign_request(params):
     params["signature"] = signature
     return params
 
-def get_kline(symbol, interval="1m"):
-    params = {"symbol": symbol, "interval": interval, "limit": 2}
+def get_kline(symbol, interval="1m", limit=2):
+    path = '/openApi/swap/v3/quote/klines'  # Новый путь для получения данных
+    params = {
+        "symbol": symbol,
+        "interval": interval,
+        "limit": limit,
+        "timestamp": str(int(time.time() * 1000))
+    }
     try:
         signed = sign_request(params.copy())
-        res = requests.get(base_url, headers=headers, params=signed)
+        url = f"{base_url}{path}?{urlencode(signed)}"
+        res = requests.get(url, headers=headers)
         res.raise_for_status()
         data = res.json().get("data", [])
-        # Логируем ответ API
         print(f"[API Response] {symbol}: {data}")
         return data
     except Exception as e:
