@@ -1,11 +1,11 @@
+import logging
 import os
 import time
-import logging
 import requests
+import pandas as pd
 from telegram import Bot
 from ta.momentum import RSIIndicator, WilliamsRIndicator
 from ta.trend import MACD
-import pandas as pd
 
 # Настройки
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -13,27 +13,37 @@ USER_CHAT_ID = os.getenv("USER_CHAT_ID")
 SYMBOLS = ["DOGE-USDT", "PEPE-USDT", "PEOPLE-USDT", "BTC-USDT", "ETH-USDT"]
 INTERVAL = "1m"
 LIMIT = 100
-BASE_URL = "https://open-api.bingx.com/openApi/quote/v1/klines"
+BASE_URL = "https://open-api.bingx.com/openApi/swap/v3/quote/klines"
 
 bot = Bot(token=TELEGRAM_TOKEN)
 logging.basicConfig(level=logging.INFO)
 
 def get_klines(symbol):
-    url = f"{BASE_URL}?symbol={symbol}&interval={INTERVAL}&limit={LIMIT}"
-    res = requests.get(url)
-    if res.status_code != 200:
-        logging.warning(f"Ошибка запроса {symbol}: {res.status_code}")
+    params = {
+        "symbol": symbol,
+        "interval": INTERVAL,
+        "limit": LIMIT
+    }
+    try:
+        res = requests.get(BASE_URL, params=params, timeout=10)
+        res.raise_for_status()
+        data = res.json()
+        if not data:
+            logging.warning(f"Ошибка запроса {symbol}: Пустые данные")
+            return None
+        df = pd.DataFrame(data)
+        df.columns = [
+            "timestamp", "open", "high", "low", "close", "volume",
+            "close_time", "quote_asset_volume", "number_of_trades",
+            "taker_buy_base_vol", "taker_buy_quote_vol", "ignore"
+        ]
+        df["close"] = pd.to_numeric(df["close"])
+        df["high"] = pd.to_numeric(df["high"])
+        df["low"] = pd.to_numeric(df["low"])
+        return df
+    except requests.exceptions.RequestException as e:
+        logging.warning(f"Ошибка запроса {symbol}: {e}")
         return None
-    data = res.json()
-    if not data.get("data"):
-        logging.warning(f"Ошибка запроса {symbol}: Пустые данные")
-        return None
-    df = pd.DataFrame(data["data"])
-    df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
-    df["close"] = pd.to_numeric(df["close"])
-    df["high"] = pd.to_numeric(df["high"])
-    df["low"] = pd.to_numeric(df["low"])
-    return df
 
 def analyze(df):
     df["rsi"] = RSIIndicator(df["close"]).rsi()
@@ -47,14 +57,14 @@ def analyze(df):
 
     signal = None
     if (
-        45 < latest["rsi"] < 65 and
-        -80 < latest["wr"] < -20 and
+        latest["rsi"] > 45 and latest["rsi"] < 65 and
+        latest["wr"] > -80 and latest["wr"] < -20 and
         latest["macd"] > latest["macd_signal"] and
         prev["macd"] < prev["macd_signal"]
     ):
         signal = "LONG"
     elif (
-        35 < latest["rsi"] < 55 and
+        latest["rsi"] < 55 and latest["rsi"] > 35 and
         latest["wr"] < -20 and
         latest["macd"] < latest["macd_signal"] and
         prev["macd"] > prev["macd_signal"]
@@ -88,7 +98,7 @@ def main_loop():
                 if signal:
                     message = format_message(symbol, signal, data)
                     bot.send_message(chat_id=USER_CHAT_ID, text=message)
-        time.sleep(300)
+        time.sleep(300)  # каждые 5 минут
 
 if __name__ == "__main__":
     main_loop()
