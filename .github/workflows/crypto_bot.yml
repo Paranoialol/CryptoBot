@@ -1,1 +1,29 @@
 
+name: Crypto Bot
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # Каждый 5 минут
+  workflow_dispatch: # Позволяет вручную запускать работу
+
+jobs:
+  crypto_bot:
+    runs-on: ubuntu-latest  # Работает на последней версии Ubuntu
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v2
+
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.x'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt  # Устанавливаем зависимости
+
+    - name: Run crypto bot script
+      run: |
+        python crypto_bot.py  # Запускаем ваш скрипт
