@@ -21,7 +21,7 @@ base_url = "https://open-api.bingx.com/openApi/swap/quote/v1/kline"
 headers = {"X-BX-APIKEY": API_KEY}
 
 app = Flask(__name__)
-bot_started = False  # Флаг, чтобы не запускать дважды
+bot_started = False
 
 # === Подпись запроса BingX ===
 def sign_request(params):
@@ -35,7 +35,7 @@ def get_kline(symbol, interval="1m"):
     params = {
         "symbol": symbol,
         "interval": interval,
-        "limit": 100
+        "limit": 3
     }
     signed = sign_request(params.copy())
     res = requests.get(base_url, headers=headers, params=signed)
@@ -58,43 +58,15 @@ def get_levels(df):
     support = min(low[-20:])
     return resistance, support
 
-# === Отправка сообщений в Telegram ===
+# === Telegram ===
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
-    try:
-        requests.post(url, data=payload)
-    except Exception as e:
-        print("Ошибка при отправке:", e)
-
-# === Получение текущих цен монет с маркировкой ===
-def get_current_prices():
-    lines = []
-    for symbol in symbols:
-        try:
-            raw = get_kline(symbol, "1m")
-            if not raw or len(raw) < 2:
-                lines.append(f"{symbol.replace('-USDT', '')}: данных нет")
-                continue
-
-            df = pd.DataFrame(raw)
-            df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
-            df = df.astype(float)
-
-            current_price = df["close"].iloc[-1]
-            prev_price = df["close"].iloc[-2]
-
-            emoji = "🟢" if current_price > prev_price else "🔴" if current_price < prev_price else "⚪️"
-            name = symbol.replace("-USDT", "")
-            lines.append(f"{emoji} {name}: {current_price:.2f}")
-        except Exception as e:
-            error_msg = f"{symbol.replace('-USDT', '')}: ошибка — {e}"
-            print(error_msg)
-            lines.append(error_msg)
-
-    return "\n".join(lines) if lines else "Нет данных по монетам."
-
-# === Анализ монеты на нескольких таймфреймах ===
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "HTML"
+    }
+# === Анализ монеты ===
 def analyze_symbol(symbol):
     found = False
     for interval in ["1m", "5m", "15m", "1h"]:
@@ -130,7 +102,33 @@ def analyze_symbol(symbol):
 
     return found
 
-# === Основной цикл анализа ===
+# === Получение текущих цен и направления ===
+def get_all_prices():
+    text = "Текущие цены:\n"
+    for symbol in symbols:
+        raw = get_kline(symbol)
+        name = symbol.replace("-USDT", "")
+        if not raw or len(raw) < 2:
+            text += f"<b>{name}</b>: данных нет\n"
+            continue
+        try:
+            df = pd.DataFrame(raw)
+            df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
+            df = df.astype(float)
+            price_now = df["close"].iloc[-1]
+            price_prev = df["close"].iloc[-2]
+            if price_now > price_prev:
+                trend = "🟢🔼"
+            elif price_now < price_prev:
+                trend = "🔴🔽"
+            else:
+                trend = "⚪️⏸"
+            text += f"<b>{name}</b>: {price_now:.4f} {trend}\n"
+        except:
+            text += f"<b>{name}</b>: ошибка данных\n"
+    return text
+
+# === Главная функция ===
 def start_bot():
     while True:
         any_signals = False
@@ -141,11 +139,11 @@ def start_bot():
             except Exception as e:
                 print(f"Ошибка анализа {symbol}: {e}")
         if not any_signals:
-            price_info = get_current_prices()
-            send_telegram_message(f"Бот работает. Пока точек входа не найдено.\nТекущие цены:\n{price_info}")
-        time.sleep(1800)  # 30 минут
+            message = "Бот работает. Пока точек входа не найдено.\n" + get_all_prices()
+            send_telegram_message(message)
+        time.sleep(1800)
 
-# === Запуск в отдельном потоке ===
+# === Запуск при переходе по Render-ссылке ===
 @app.route('/')
 def home():
     global bot_started
@@ -156,6 +154,5 @@ def home():
         bot_started = True
     return "Бот запущен и работает в фоне."
 
-# === Flask стартует при открытии Render-ссылки ===
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000)
