@@ -1,27 +1,36 @@
-name: Crypto Bot
+name: Crypto Bot Deploy
 
 on:
   push:
     branches:
-      - main  # или название вашей основной ветки, например, "master"
+      - main
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
+    - name: Checkout code
+      uses: actions/checkout@v2
 
-      - name: Set up Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: 3.9
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: 3.9
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
 
-      - name: Run bot
-        run: python bot_signal_main.py
+    - name: Check file existence
+      run: |
+        if [ -f "bot_signal_main.py" ]; then
+          echo "File exists!"
+        else
+          echo "File does not exist!"
+          exit 1
+        fi
+
+    - name: Run the bot
+      run: |
+        python bot_signal_main.py
