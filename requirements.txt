@@ -3,3 +3,4 @@ requests
 ccxt
 schedule
 pandas
+ta
