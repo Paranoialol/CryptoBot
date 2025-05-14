@@ -1,6 +1,2 @@
-python-telegram-bot==13.15
-requests
-ccxt
-schedule
-pandas
-ta
+requests==2.26.0
+pandas==1.3.3
