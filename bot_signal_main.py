@@ -8,7 +8,6 @@ import json
 from urllib.parse import urlencode
 from flask import Flask
 
-# Используем переменные окружения для API ключей
 API_KEY = os.getenv("BINGX_API_KEY")
 API_SECRET = os.getenv("BINGX_API_SECRET")
 TELEGRAM_TOKEN = "8031738383:AAE3zxHvhSFhbTESh0dxEPaoODCrPnuOIxw"
@@ -40,9 +39,11 @@ def get_kline(symbol, interval="1m", limit=2):
         url = f"{base_url}{path}?{urlencode(signed)}"
         print(f"[Отправка запроса] {url}")  # Логируем URL запроса
         res = requests.get(url, headers=headers)
-        res.raise_for_status()
+        res.raise_for_status()  # Проверка на ошибки запроса
         response_data = res.json()
         print(f"[Ответ от API] {response_data}")  # Логируем ответ от API
+
+        # Проверка на наличие данных в ответе
         if 'data' in response_data and response_data['data']:
             return response_data['data']
         else:
@@ -54,17 +55,24 @@ def get_kline(symbol, interval="1m", limit=2):
 
 def get_price_change(symbol):
     klines = get_kline(symbol, "1m")
+    print(f"Полученные данные для {symbol}: {klines}")  # Логируем полученные данные для каждого символа
+
     if len(klines) >= 2:
-        last = float(klines[-1][4])
-        prev = float(klines[-2][4])
+        # Берем цену закрытия последней и предыдущей свечи
+        last = float(klines[0]["close"])  # Используем цену закрытия первой свечи
+        prev = float(klines[1]["close"])  # Используем цену закрытия второй свечи
         diff = last - prev
+        
+        # Логика для определения цвета на основе изменений в цене
         if diff > 0:
             color = "🟢"
         elif diff < 0:
             color = "🔴"
         else:
             color = "⚪"
+        
         return f"{color} {symbol.replace('-USDT','')}: {last:.2f}"
+    
     return f"⚠️ {symbol.replace('-USDT','')}: данных нет"
 
 def send_telegram_message(message):
@@ -78,10 +86,6 @@ def send_telegram_message(message):
         print("Ошибка при отправке:", e)
 
 def start_bot():
-    # Отправляем первое сообщение сразу после старта
-    msg = "Бот запущен и начинает мониторинг."
-    send_telegram_message(msg)
-
     while True:
         any_signals = False
         for symbol in symbols:
@@ -95,7 +99,7 @@ def start_bot():
         if not any_signals:
             msg = "Бот работает. Пока точек входа не найдено.\nТекущие цены:\n" + "\n".join([get_price_change(sym) for sym in symbols])
             send_telegram_message(msg)
-        time.sleep(1800)  # Интервал между запросами — 30 минут
+        time.sleep(1800)
 
 @app.route('/')
 def home():
