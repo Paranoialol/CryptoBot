@@ -10,10 +10,10 @@ from ta.trend import MACD
 # Настройки
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 USER_CHAT_ID = os.getenv("USER_CHAT_ID")
-SYMBOLS = ["DOGE-USDT", "PEPE-USDT", "PEOPLE-USDT", "BTC-USDT", "ETH-USDT"]
+SYMBOLS = ["dogeusdt", "pepeusdt", "peopleusdt", "btcusdt", "ethusdt"]
 INTERVAL = "1m"
 LIMIT = 100
-BASE_URL = "https://open-api.bingx.com/openApi/swap/v3/quote/klines"
+BASE_URL = "https://api.bingx.com/api/v1/futures/market/candles"
 
 bot = Bot(token=TELEGRAM_TOKEN)
 logging.basicConfig(level=logging.INFO)
@@ -27,16 +27,16 @@ def get_klines(symbol):
     try:
         res = requests.get(BASE_URL, params=params, timeout=10)
         res.raise_for_status()
-        data = res.json()
+        data = res.json().get("data", [])
         if not data:
             logging.warning(f"Ошибка запроса {symbol}: Пустые данные")
             return None
         df = pd.DataFrame(data)
-if df.shape[1] == 6:
-    df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
-else:
-    logging.warning(f"Неподдерживаемый формат данных: {df.shape}")
-    return None
+        if df.shape[1] == 6:
+            df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
+        else:
+            logging.warning(f"Неподдерживаемый формат данных: {df.shape}")
+            return None
         df["close"] = pd.to_numeric(df["close"])
         df["high"] = pd.to_numeric(df["high"])
         df["low"] = pd.to_numeric(df["low"])
@@ -79,7 +79,7 @@ def format_message(symbol, signal, data):
     direction = "вверх" if data["macd"] > data["macd_signal"] else "вниз"
     
     msg = (
-        f"Монета: {symbol.replace('-USDT', '')}\n"
+        f"Монета: {symbol.upper().replace('USDT', '')}\n"
         f"Сигнал: {signal}\n"
         f"Цена входа: {entry}\n"
         f"TP: {tp} | SL: {sl}\n"
