@@ -61,7 +61,7 @@ def calculate_tp_sl(current_price, position_type="long"):
         sl = current_price * (1 + sl_percentage)
         tp = current_price * (1 - tp_percentage)
 
-    return round(sl, 2), round(tp, 2)
+    return round(sl, 5), round(tp, 5)
 
 def get_price_change(symbol):
     klines = get_kline(symbol, "1m")
@@ -77,7 +77,7 @@ def get_price_change(symbol):
         else:
             color = "⚪"
         
-        return last, f"{color} {symbol.replace('-USDT','')}: {last:.2f}"
+        return last, f"{color} {symbol.replace('-USDT','')}: {last:.5f}"
     
     return None, f"⚠️ {symbol.replace('-USDT','')}: данных нет"
 
