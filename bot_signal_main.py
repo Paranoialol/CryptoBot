@@ -32,11 +32,11 @@ def get_klines(symbol):
             logging.warning(f"Ошибка запроса {symbol}: Пустые данные")
             return None
         df = pd.DataFrame(data)
-        df.columns = [
-            "timestamp", "open", "high", "low", "close", "volume",
-            "close_time", "quote_asset_volume", "number_of_trades",
-            "taker_buy_base_vol", "taker_buy_quote_vol", "ignore"
-        ]
+if df.shape[1] == 6:
+    df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
+else:
+    logging.warning(f"Неподдерживаемый формат данных: {df.shape}")
+    return None
         df["close"] = pd.to_numeric(df["close"])
         df["high"] = pd.to_numeric(df["high"])
         df["low"] = pd.to_numeric(df["low"])
