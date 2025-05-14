@@ -13,6 +13,10 @@ API_SECRET = os.getenv('BINGX_API_SECRET')
 if not API_KEY or not API_SECRET:
     raise ValueError("API-ключ и секретный ключ не установлены в переменных среды.")
 
+# Печать для проверки значений API-ключей
+print(f"API_KEY: {API_KEY}")
+print(f"API_SECRET: {API_SECRET}")
+
 BASE_URL = 'https://api.bingx.com/api/v1/futures/market/candles'
 
 # Формируем параметры для запроса
@@ -35,6 +39,9 @@ signature_payload = urlencode(params)
 # Создаем подпись с использованием секретного ключа
 signature = hmac.new(API_SECRET.encode('utf-8'), signature_payload.encode('utf-8'), hashlib.sha256).hexdigest()
 
+# Печатаем подпись для отладки
+print(f"Signature: {signature}")
+
 # Добавляем подпись в параметры запроса
 params['signature'] = signature
 
@@ -48,7 +55,7 @@ response = requests.get(BASE_URL, headers=headers, params=params)
 
 # Проверяем результат
 if response.status_code == 200:
-    print("Ответ:", response.json())
+    print("Ответ от API:", response.json())
 else:
     print(f"Ошибка: {response.status_code}")
     print(response.text)
