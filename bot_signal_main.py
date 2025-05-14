@@ -22,13 +22,27 @@ headers = {"X-BX-APIKEY": API_KEY}
 app = Flask(__name__)
 bot_started = False
 
+def send_telegram_message(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+    try:
+        res = requests.post(url, data=payload)
+        if not res.ok:
+            print("Ошибка Telegram:", res.text)
+    except Exception as e:
+        print("Ошибка отправки в Telegram:", e)
+
+def debug(msg):
+    print(msg)
+    send_telegram_message(f"[DEBUG] {msg}")
+
 def sign_request(params):
     query = '&'.join(f"{k}={v}" for k, v in sorted(params.items()))
     signature = hmac.new(API_SECRET.encode(), query.encode(), hashlib.sha256).hexdigest()
     params["signature"] = signature
     return params
 
-def get_kline(symbol, interval="1m", limit=500):  # Увеличен лимит
+def get_kline(symbol, interval="1m", limit=500):
     path = '/openApi/swap/v3/quote/klines'
     params = {
         "symbol": symbol,
@@ -43,13 +57,13 @@ def get_kline(symbol, interval="1m", limit=500):  # Увеличен лимит
         res.raise_for_status()
         response_data = res.json()
         if 'data' in response_data and response_data['data']:
-            print(f"[{symbol}] Получено {len(response_data['data'])} свечей")
+            debug(f"[{symbol}] Получено {len(response_data['data'])} свечей")
             return response_data['data']
         else:
-            print(f"[{symbol}] Нет данных от API")
+            debug(f"[{symbol}] Нет данных от API")
             return []
     except Exception as e:
-        print(f"[Ошибка get_kline] {symbol}: {e}")
+        debug(f"[Ошибка get_kline] {symbol}: {e}")
         return []
 
 def calculate_indicators(klines):
@@ -86,7 +100,7 @@ def calculate_indicators(klines):
             "volume_previous": df["volume"].iloc[-2] if len(df) > 1 else df["volume"].iloc[-1]
         }
     except Exception as e:
-        print(f"[Ошибка индикаторов] {e}")
+        debug(f"[Ошибка индикаторов] {e}")
         return None
 
 def get_signal(symbol):
@@ -105,16 +119,6 @@ def get_signal(symbol):
             return f"⚪ {symbol.replace('-USDT','')}: Нет сигнала"
     return f"⚠️ {symbol.replace('-USDT','')}: Недостаточно данных"
 
-def send_telegram_message(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
-    try:
-        res = requests.post(url, data=payload)
-        if not res.ok:
-            print("Ошибка Telegram:", res.text)
-    except Exception as e:
-        print("Ошибка отправки в Telegram:", e)
-
 def start_bot():
     while True:
         full_message = "My CryptoFTW bot:\n"
@@ -123,7 +127,7 @@ def start_bot():
                 signal = get_signal(symbol)
                 full_message += f"\n{signal}"
             except Exception as e:
-                print(f"[Ошибка при анализе {symbol}] {e}")
+                debug(f"[Ошибка при анализе {symbol}] {e}")
         send_telegram_message(full_message)
         time.sleep(300)
 
