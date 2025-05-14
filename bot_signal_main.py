@@ -10,6 +10,7 @@ from ta.trend import MACD
 # Настройки
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 USER_CHAT_ID = os.getenv("USER_CHAT_ID")
+API_KEY = os.getenv("BINGX_API_KEY")  # Добавь сюда свой API ключ BingX
 SYMBOLS = ["dogeusdt", "pepeusdt", "peopleusdt", "btcusdt", "ethusdt"]
 INTERVAL = "1m"
 LIMIT = 100
@@ -19,14 +20,17 @@ bot = Bot(token=TELEGRAM_TOKEN)
 logging.basicConfig(level=logging.INFO)
 
 def get_klines(symbol):
+    headers = {
+        "X-BingX-API-KEY": API_KEY  # Заголовок для авторизации
+    }
     params = {
         "symbol": symbol,
         "interval": INTERVAL,
         "limit": LIMIT
     }
     try:
-        res = requests.get(BASE_URL, params=params, timeout=10)
-        res.raise_for_status()
+        res = requests.get(BASE_URL, params=params, headers=headers, timeout=10)
+        res.raise_for_status()  # Генерирует исключение при статусе 4xx или 5xx
         data = res.json().get("data", [])
         if not data:
             logging.warning(f"Ошибка запроса {symbol}: Пустые данные")
