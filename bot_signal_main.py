@@ -1,3 +1,4 @@
+from flask import Flask
 import os
 import time
 import hmac
@@ -22,6 +23,12 @@ base_url = "https://open-api.bingx.com/openApi/swap/quote/v1/kline"
 headers = {
     "X-BX-APIKEY": API_KEY
 }
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Crypto bot is running!"
 
 def sign_request(params):
     query = '&'.join(f"{k}={v}" for k, v in sorted(params.items()))
@@ -99,7 +106,8 @@ def analyze_symbol(symbol):
         )
         send_telegram_message(msg)
 
-if __name__ == "__main__":
+@app.route('/start_bot')
+def start_bot():
     while True:
         for symbol in symbols:
             try:
@@ -107,3 +115,7 @@ if __name__ == "__main__":
             except Exception as e:
                 print(f"Ошибка для {symbol}: {e}")
         time.sleep(300)  # каждые 5 минут
+    return "Bot started!"
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8000)
