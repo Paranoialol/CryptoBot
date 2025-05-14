@@ -67,19 +67,14 @@ def format_message(symbol, signal, data):
     tp = round(entry * (1.02 if signal == "LONG" else 0.98), 6)
     sl = round(entry * (0.99 if signal == "LONG" else 1.01), 6)
     direction = "вверх" if data["macd"] > data["macd_signal"] else "вниз"
+    
     msg = (
-        f"Монета: {symbol.upper().replace('USDT', '')}
-"
-        f"Сигнал: {signal}
-"
-        f"Цена входа: {entry}
-"
-        f"TP: {tp} | SL: {sl}
-"
-        f"MACD: {direction}
-"
-        f"RSI: {round(data['rsi'], 2)}
-"
+        f"Монета: {symbol.upper().replace('USDT', '')}\n"
+        f"Сигнал: {signal}\n"
+        f"Цена входа: {entry}\n"
+        f"TP: {tp} | SL: {sl}\n"
+        f"MACD: {direction}\n"
+        f"RSI: {round(data['rsi'], 2)}\n"
         f"WR: {round(data['wr'], 2)}"
     )
     return msg
