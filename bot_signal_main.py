@@ -67,6 +67,33 @@ def send_telegram_message(message):
     except Exception as e:
         print("Ошибка при отправке:", e)
 
+# === Получение текущих цен монет с маркировкой ===
+def get_current_prices():
+    lines = []
+    for symbol in symbols:
+        try:
+            raw = get_kline(symbol, "1m")
+            if not raw or len(raw) < 2:
+                lines.append(f"{symbol.replace('-USDT', '')}: данных нет")
+                continue
+
+            df = pd.DataFrame(raw)
+            df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
+            df = df.astype(float)
+
+            current_price = df["close"].iloc[-1]
+            prev_price = df["close"].iloc[-2]
+
+            emoji = "🟢" if current_price > prev_price else "🔴" if current_price < prev_price else "⚪️"
+            name = symbol.replace("-USDT", "")
+            lines.append(f"{emoji} {name}: {current_price:.2f}")
+        except Exception as e:
+            error_msg = f"{symbol.replace('-USDT', '')}: ошибка — {e}"
+            print(error_msg)
+            lines.append(error_msg)
+
+    return "\n".join(lines) if lines else "Нет данных по монетам."
+
 # === Анализ монеты на нескольких таймфреймах ===
 def analyze_symbol(symbol):
     found = False
@@ -103,29 +130,6 @@ def analyze_symbol(symbol):
 
     return found
 
-# === Получение текущих цен для всех монет с цветами ===
-def get_current_prices():
-    lines = []
-    for symbol in symbols:
-        try:
-            raw = get_kline(symbol, "1m")
-            if not raw:
-                continue
-            df = pd.DataFrame(raw)
-            df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
-            df = df.astype(float)
-
-            current_price = df["close"].iloc[-1]
-            prev_price = df["close"].iloc[-2]
-
-            emoji = "🟢" if current_price > prev_price else "🔴" if current_price < prev_price else "⚪️"
-            name = symbol.replace("-USDT", "")
-            lines.append(f"{emoji} {name}: {current_price:.2f}")
-        except Exception as e:
-            lines.append(f"{symbol.replace('-USDT', '')}: ошибка")
-
-    return "\n".join(lines)
-
 # === Основной цикл анализа ===
 def start_bot():
     while True:
@@ -137,8 +141,8 @@ def start_bot():
             except Exception as e:
                 print(f"Ошибка анализа {symbol}: {e}")
         if not any_signals:
-            prices = get_current_prices()
-            send_telegram_message(f"Бот работает. Пока точек входа не найдено.\nТекущие цены:\n{prices}")
+            price_info = get_current_prices()
+            send_telegram_message(f"Бот работает. Пока точек входа не найдено.\nТекущие цены:\n{price_info}")
         time.sleep(1800)  # 30 минут
 
 # === Запуск в отдельном потоке ===
