@@ -1,50 +1,69 @@
-import logging import os import time import hmac import hashlib import requests import pandas as pd from telegram import Bot from ta.momentum import RSIIndicator, WilliamsRIndicator from ta.trend import MACD
+import os
+import time
+import requests
+import hmac
+import hashlib
+import logging
+import pandas as pd
 
-Настройки
+# Настройка логгирования
+logging.basicConfig(level=logging.INFO)
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") USER_CHAT_ID = os.getenv("USER_CHAT_ID") API_KEY = os.getenv("BINGX_API_KEY") API_SECRET = os.getenv("BINGX_API_SECRET") SYMBOLS = ["BTC-USDT", "ETH-USDT", "DOGE-USDT", "PEPE-USDT", "PEOPLE-USDT"] INTERVAL = "1m" LIMIT = 100 BASE_URL = "https://open-api.bingx.com/openApi/swap/v2/quote/kline"
+# Получаем ключи из переменных окружения
+API_KEY = os.environ.get("BINGX_API_KEY")
+API_SECRET = os.environ.get("BINGX_API_SECRET")
 
-bot = Bot(token=TELEGRAM_TOKEN) logging.basicConfig(level=logging.INFO)
+# Параметры
+SYMBOLS = ['BTC-USDT', 'ETH-USDT', 'PEOPLE-USDT', 'DOGE-USDT']
+INTERVAL = '1m'
+LIMIT = 100
+BASE_URL = "https://open-api.bingx.com"
 
-def sign_request(params, secret): query = "&".join([f"{key}={params[key]}" for key in sorted(params)]) signature = hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest() return signature
+# Функция генерации подписи
+def sign(params: dict, secret_key: str):
+    sorted_params = sorted(params.items())
+    encoded = "&".join([f"{k}={v}" for k, v in sorted_params])
+    signature = hmac.new(secret_key.encode(), encoded.encode(), hashlib.sha256).hexdigest()
+    return signature
 
-def get_klines(symbol): params = { "symbol": symbol, "interval": INTERVAL, "limit": LIMIT, "timestamp": str(int(time.time() * 1000)) } params["signature"] = sign_request(params, API_SECRET) headers = { "X-BX-APIKEY": API_KEY } res = requests.get(BASE_URL, headers=headers, params=params) if res.status_code != 200: logging.warning(f"Ошибка запроса {symbol}: {res.status_code} {res.text}") return None data = res.json().get("data") if not data: logging.warning(f"Пустые данные: {symbol}") return None df = pd.DataFrame(data) if df.shape[1] == 6: df.columns = ["timestamp", "open", "high", "low", "close", "volume"] df["close"] = pd.to_numeric(df["close"]) df["high"] = pd.to_numeric(df["high"]) df["low"] = pd.to_numeric(df["low"]) return df return None
+# Функция получения свечей (Klines)
+def get_klines(symbol):
+    endpoint = "/openApi/futures/market/kline"
+    url = BASE_URL + endpoint
+    timestamp = int(time.time() * 1000)
+    params = {
+        "symbol": symbol,
+        "interval": INTERVAL,
+        "limit": LIMIT,
+        "timestamp": timestamp
+    }
+    params["signature"] = sign(params, API_SECRET)
+    headers = {
+        "X-BX-APIKEY": API_KEY
+    }
 
-def analyze(df): df["rsi"] = RSIIndicator(df["close"]).rsi() df["wr"] = WilliamsRIndicator(df["high"], df["low"], df["close"]).williams_r() macd = MACD(close=df["close"]) df["macd"] = macd.macd() df["macd_signal"] = macd.macd_signal()
+    try:
+        response = requests.get(url, params=params, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        candles = data.get("data", [])
+        if not candles:
+            logging.warning(f"Пустые данные по {symbol}")
+            return None
+        df = pd.DataFrame(candles)
+        df.columns = ['open_time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_volume', 'count', 'taker_buy_volume', 'taker_buy_quote_volume', 'ignore']
+        df['close'] = df['close'].astype(float)
+        return df
+    except Exception as e:
+        logging.warning(f"Ошибка запроса {symbol}: {e}")
+        return None
 
-latest = df.iloc[-1]
-prev = df.iloc[-2]
+# Основной цикл
+def main():
+    for symbol in SYMBOLS:
+        df = get_klines(symbol)
+        if df is not None:
+            logging.info(f"Последняя свеча по {symbol}: {df.iloc[-1]['close']}")
 
-signal = None
-if (
-    latest["rsi"] > 45 and latest["rsi"] < 65 and
-    latest["wr"] > -80 and latest["wr"] < -20 and
-    latest["macd"] > latest["macd_signal"] and
-    prev["macd"] < prev["macd_signal"]
-):
-    signal = "LONG"
-elif (
-    latest["rsi"] < 55 and latest["rsi"] > 35 and
-    latest["wr"] < -20 and
-    latest["macd"] < latest["macd_signal"] and
-    prev["macd"] > prev["macd_signal"]
-):
-    signal = "SHORT"
-return signal, latest
-
-def format_message(symbol, signal, data): entry = round(float(data["close"]), 6) tp = round(entry * (1.02 if signal == "LONG" else 0.98), 6) sl = round(entry * (0.99 if signal == "LONG" else 1.01), 6) direction = "вверх" if data["macd"] > data["macd_signal"] else "вниз"
-
-msg = (
-    f"Монета: {symbol.replace('-USDT', '')}\n"
-    f"Сигнал: {signal}\n"
-    f"Цена входа: {entry}\n"
-    f"TP: {tp} | SL: {sl}\n"
-    f"MACD: {direction}\n"
-    f"RSI: {round(data['rsi'], 2)}\n"
-    f"WR: {round(data['wr'], 2)}"
-)
-return msg
-
-def main_loop(): while True: for symbol in SYMBOLS: df = get_klines(symbol) if df is not None: signal, data = analyze(df) if signal: message = format_message(symbol, signal, data) bot.send_message(chat_id=USER_CHAT_ID, text=message) time.sleep(300)  # каждые 5 минут
-
-if name == "main": main_loop()
+if __name__ == "__main__":
+    main()
