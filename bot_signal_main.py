@@ -28,7 +28,7 @@ def sign_request(params):
     params["signature"] = signature
     return params
 
-def get_kline(symbol, interval="1m", limit=500):  # Увеличен лимит
+def get_kline(symbol, interval="1m", limit=100):
     path = '/openApi/swap/v3/quote/klines'
     params = {
         "symbol": symbol,
@@ -62,6 +62,10 @@ def calculate_indicators(klines):
 
     df.dropna(inplace=True)
 
+    if len(df) < 50:
+        print("[Ошибка индикаторов] Недостаточно данных для расчёта индикаторов.")
+        return None
+
     try:
         macd = ta.macd(df["close"], fast=12, slow=26, signal=9).dropna()
         rsi = ta.rsi(df["close"], length=14).dropna()
@@ -73,8 +77,8 @@ def calculate_indicators(klines):
             raise ValueError("Недостаточно данных для MACD")
 
         return {
-            "macd": macd["MACD"].iloc[-1],
-            "macd_signal": macd["MACDs"].iloc[-1],
+            "macd": macd["MACD_12_26_9"].iloc[-1],
+            "macd_signal": macd["MACDs_12_26_9"].iloc[-1],
             "rsi": rsi.iloc[-1],
             "ema": ema.iloc[-1],
             "upperband": bbands["BBU_20_2.0"].iloc[-1],
