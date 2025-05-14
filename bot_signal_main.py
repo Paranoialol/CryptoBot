@@ -21,6 +21,7 @@ base_url = "https://open-api.bingx.com"
 headers = {"X-BX-APIKEY": API_KEY}
 
 app = Flask(__name__)
+bot_started = False
 
 def sign_request(params):
     query = '&'.join(f"{k}={v}" for k, v in sorted(params.items()))
@@ -61,10 +62,24 @@ def calculate_indicators(klines):
     df["volume"] = df["volume"].astype(float)
 
     macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
+    if macd is None or macd.isnull().values.any() or "MACD" not in macd or "MACDs" not in macd:
+        raise ValueError("Недостаточно данных для MACD")
+
     rsi = ta.rsi(df["close"], length=14)
+    if rsi.isnull().values.any():
+        raise ValueError("Недостаточно данных для RSI")
+
     ema = ta.ema(df["close"], length=21)
+    if ema.isnull().values.any():
+        raise ValueError("Недостаточно данных для EMA")
+
     bbands = ta.bbands(df["close"], length=20, std=2)
+    if bbands.isnull().values.any():
+        raise ValueError("Недостаточно данных для Bollinger Bands")
+
     stoch = ta.stoch(df["high"], df["low"], df["close"], fastk_period=14, slowk_period=3, slowd_period=3)
+    if stoch.isnull().values.any():
+        raise ValueError("Недостаточно данных для Stochastic")
 
     return {
         "macd": macd["MACD"].iloc[-1],
@@ -81,18 +96,23 @@ def calculate_indicators(klines):
     }
 
 def get_signal(symbol):
-    klines = get_kline(symbol, "1m")
-    if len(klines) >= 200:
-        indicators = calculate_indicators(klines)
-        if indicators["macd"] > indicators["macd_signal"] and indicators["rsi"] < 30 and indicators["volume"] > indicators["volume_previous"]:
-            if indicators["ema"] < indicators["ema_previous"]:
-                return f"🔵 {symbol.replace('-USDT','')}: Лонг\nTP: {round(indicators['ema'] * 1.03, 5)}, SL: {round(indicators['ema'] * 0.97, 5)}"
-        elif indicators["macd"] < indicators["macd_signal"] and indicators["rsi"] > 70 and indicators["volume"] > indicators["volume_previous"]:
-            if indicators["ema"] > indicators["ema_previous"]:
-                return f"🔴 {symbol.replace('-USDT','')}: Шорт\nTP: {round(indicators['ema'] * 0.97, 5)}, SL: {round(indicators['ema'] * 1.03, 5)}"
-        else:
-            return f"⚪ {symbol.replace('-USDT','')}: Нет сигнала"
-    return f"⚠️ {symbol.replace('-USDT','')}: Недостаточно данных"
+    try:
+        klines = get_kline(symbol, "1m")
+        if len(klines) >= 50:
+            indicators = calculate_indicators(klines)
+
+            if indicators["macd"] > indicators["macd_signal"] and indicators["rsi"] < 30 and indicators["volume"] > indicators["volume_previous"]:
+                if indicators["ema"] < indicators["ema_previous"]:
+                    return f"🔵 {symbol.replace('-USDT','')}: Лонг\nTP: {round(indicators['ema'] * 1.03, 5)}, SL: {round(indicators['ema'] * 0.97, 5)}"
+            elif indicators["macd"] < indicators["macd_signal"] and indicators["rsi"] > 70 and indicators["volume"] > indicators["volume_previous"]:
+                if indicators["ema"] > indicators["ema_previous"]:
+                    return f"🔴 {symbol.replace('-USDT','')}: Шорт\nTP: {round(indicators['ema'] * 0.97, 5)}, SL: {round(indicators['ema'] * 1.03, 5)}"
+            else:
+                return f"⚪ {symbol.replace('-USDT','')}: Нет сигнала"
+        return f"⚠️ {symbol.replace('-USDT','')}: Недостаточно данных"
+    except Exception as e:
+        print(f"[Ошибка get_signal] {symbol}: {e}")
+        return f"⚠️ {symbol.replace('-USDT','')}: Недостаточно данных ({str(e)})"
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -102,33 +122,29 @@ def send_telegram_message(message):
         if not res.ok:
             print("Ошибка отправки:", res.text)
     except Exception as e:
-        print("Ошибка при отправке:", e)
+        print("Ошибка при отправке в Telegram:", e)
 
 def start_bot():
     while True:
-        any_signals = False
+        all_signals = []
         for symbol in symbols:
-            try:
-                signal = get_signal(symbol)
-                print(f"[Сигнал] {signal}")
-                if "данных нет" not in signal:
-                    send_telegram_message(signal)
-                    any_signals = True
-            except Exception as e:
-                print(f"[Ошибка при анализе {symbol}] {e}")
-        if not any_signals:
-            msg = "Бот работает, мой господин. Пока точек входа не найдено. Текущие сигналы:\n" + "\n".join([get_signal(sym) for sym in symbols])
-            send_telegram_message(msg)
-        time.sleep(300)
+            signal = get_signal(symbol)
+            all_signals.append(signal)
+            time.sleep(1)  # Чтобы не заспамить API
 
-# Запускаем бота в фоновом потоке сразу при запуске
-thread = threading.Thread(target=start_bot)
-thread.daemon = True
-thread.start()
+        send_telegram_message("My CryptoFTW bot:\n\n" + "\n\n".join(all_signals))
+        print("[LOG] Цикл анализа завершён. Ожидание 5 минут...")
+        time.sleep(300)
 
 @app.route('/')
 def home():
-    return "Бот уже работает!"
+    global bot_started
+    if not bot_started:
+        thread = threading.Thread(target=start_bot)
+        thread.daemon = True
+        thread.start()
+        bot_started = True
+    return "Бот запущен и работает в фоне."
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000)
