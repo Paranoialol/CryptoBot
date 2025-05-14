@@ -26,4 +26,4 @@ jobs:
 
     - name: Run crypto bot script
       run: |
-        python crypto_bot.py  # Запускаем ваш скрипт
+        python bot_signal_main.py # Запускаем ваш скрипт
