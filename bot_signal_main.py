@@ -1,61 +1,49 @@
-import os
-import time
-import hmac
-import hashlib
 import requests
-from urllib.parse import urlencode
+import time
+import hashlib
+import hmac
+import os
 
-# Получаем API-ключ и секретный ключ из переменных среды
+# Получаем ключи из переменных среды
 API_KEY = os.getenv('BINGX_API_KEY')
 API_SECRET = os.getenv('BINGX_API_SECRET')
 
-# Убедись, что переменные установлены корректно
-if not API_KEY or not API_SECRET:
-    raise ValueError("API-ключ и секретный ключ не установлены в переменных среды.")
+# URL для API
+url = 'https://api.bingx.com/api/v1/futures/market/candles'
 
-# Печать для проверки значений API-ключей
-print(f"API_KEY: {API_KEY}")
-print(f"API_SECRET: {API_SECRET}")
-
-BASE_URL = 'https://api.bingx.com/api/v1/futures/market/candles'
-
-# Формируем параметры для запроса
+# Параметры запроса
 params = {
-    'symbol': 'BTC-USDT',
+    'symbol': 'btcusdt',
     'interval': '1m',
     'limit': 100
 }
 
-# Добавляем параметры в запрос
-query_string = urlencode(params)
+# Время запроса в миллисекундах
+timestamp = str(int(time.time() * 1000))
 
-# Получаем текущую метку времени в миллисекундах
-timestamp = str(int(time.time() * 1000))  # Текущая метка времени в миллисекундах
-params['timestamp'] = timestamp
+# Формируем строку для подписи
+query_string = f"symbol={params['symbol']}&interval={params['interval']}&limit={params['limit']}&timestamp={timestamp}"
 
-# Создаем строку запроса для подписи
-signature_payload = urlencode(params)
+# Подпись
+signature = hmac.new(
+    API_SECRET.encode('utf-8'),
+    query_string.encode('utf-8'),
+    hashlib.sha256
+).hexdigest()
 
-# Создаем подпись с использованием секретного ключа
-signature = hmac.new(API_SECRET.encode('utf-8'), signature_payload.encode('utf-8'), hashlib.sha256).hexdigest()
-
-# Печатаем подпись для отладки
-print(f"Signature: {signature}")
-
-# Добавляем подпись в параметры запроса
-params['signature'] = signature
-
-# Заголовки для аутентификации
+# Заголовки с API ключом и подписью
 headers = {
-    'X-BINGX-API-KEY': API_KEY
+    'X-BX-APIKEY': API_KEY,  # Используем API ключ в заголовке
 }
 
-# Выполним запрос с аутентификацией
-response = requests.get(BASE_URL, headers=headers, params=params)
+# Добавляем подпись в параметры запроса
+params['timestamp'] = timestamp
+params['signature'] = signature
 
-# Проверяем результат
+# Отправляем запрос
+response = requests.get(url, params=params, headers=headers)
+
 if response.status_code == 200:
-    print("Ответ от API:", response.json())
+    print(response.json())  # Выводим результат
 else:
-    print(f"Ошибка: {response.status_code}")
-    print(response.text)
+    print(f"Error: {response.status_code} - {response.text}")
