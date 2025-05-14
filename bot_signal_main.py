@@ -1,21 +1,21 @@
-import requests
 import time
 import hashlib
 import hmac
 import os
+import requests
 
-# Получаем ключи из переменных среды
-API_KEY = os.getenv('BINGX_API_KEY')
-API_SECRET = os.getenv('BINGX_API_SECRET')
+# Получаем ключи из переменных окружения
+API_KEY = os.getenv('BINGX_API_KEY')  # API_KEY
+API_SECRET = os.getenv('BINGX_API_SECRET')  # API_SECRET
 
 # URL для API
 url = 'https://api.bingx.com/api/v1/futures/market/candles'
 
 # Параметры запроса
 params = {
-    'symbol': 'btcusdt',
-    'interval': '1m',
-    'limit': 100
+    'symbol': 'btcusdt',  # Символ монеты
+    'interval': '1m',     # Интервал
+    'limit': 100          # Лимит данных
 }
 
 # Время запроса в миллисекундах
@@ -33,7 +33,7 @@ signature = hmac.new(
 
 # Заголовки с API ключом и подписью
 headers = {
-    'X-BX-APIKEY': API_KEY,  # Используем API ключ в заголовке
+    'X-BX-APIKEY': API_KEY  # Используем API ключ в заголовке
 }
 
 # Добавляем подпись в параметры запроса
