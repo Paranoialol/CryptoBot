@@ -67,6 +67,23 @@ def send_telegram_message(message):
     except Exception as e:
         print("Ошибка при отправке:", e)
 
+# === Получение текущих цен ===
+def get_current_prices():
+    prices = {}
+    for symbol in symbols:
+        params = {
+            "symbol": symbol,
+            "interval": "1m",
+            "limit": 1
+        }
+        signed = sign_request(params.copy())
+        res = requests.get(base_url, headers=headers, params=signed)
+        data = res.json().get("data", [])
+        if data:
+            current_price = data[0]["close"]
+            prices[symbol] = float(current_price)
+    return prices
+
 # === Анализ монеты на нескольких таймфреймах ===
 def analyze_symbol(symbol):
     found = False
@@ -114,7 +131,11 @@ def start_bot():
             except Exception as e:
                 print(f"Ошибка анализа {symbol}: {e}")
         if not any_signals:
-            send_telegram_message("Бот работает. Пока точек входа не найдено.")
+            prices = get_current_prices()
+            message = "Бот работает. Пока точек входа не найдено.\nТекущие цены:\n"
+            for symbol, price in prices.items():
+                message += f"{symbol.replace('-USDT', '')}: {price:.2f} USDT\n"
+            send_telegram_message(message)
         time.sleep(1800)  # 30 минут
 
 # === Запуск в отдельном потоке ===
