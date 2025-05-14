@@ -8,6 +8,7 @@ import json
 from urllib.parse import urlencode
 from flask import Flask
 
+# Используем переменные окружения для API ключей
 API_KEY = os.getenv("BINGX_API_KEY")
 API_SECRET = os.getenv("BINGX_API_SECRET")
 TELEGRAM_TOKEN = "8031738383:AAE3zxHvhSFhbTESh0dxEPaoODCrPnuOIxw"
@@ -90,7 +91,7 @@ def start_bot():
         if not any_signals:
             msg = "Бот работает. Пока точек входа не найдено.\nТекущие цены:\n" + "\n".join([get_price_change(sym) for sym in symbols])
             send_telegram_message(msg)
-        time.sleep(1800)
+        time.sleep(1800)  # Интервал между запросами — 30 минут
 
 @app.route('/')
 def home():
