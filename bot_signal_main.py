@@ -37,33 +37,39 @@ def get_kline(symbol, interval="1m", limit=2):
     try:
         signed = sign_request(params.copy())
         url = f"{base_url}{path}?{urlencode(signed)}"
-        print(f"[Отправка запроса] {url}")  # Логируем URL запроса
         res = requests.get(url, headers=headers)
         res.raise_for_status()  # Проверка на ошибки запроса
         response_data = res.json()
-        print(f"[Ответ от API] {response_data}")  # Логируем ответ от API
 
-        # Проверка на наличие данных в ответе
         if 'data' in response_data and response_data['data']:
             return response_data['data']
         else:
-            print(f"[Ответ от API] Нет данных для {symbol}")
             return []
     except Exception as e:
         print(f"[Ошибка get_kline] {symbol}: {e}")
         return []
 
+def calculate_tp_sl(current_price, position_type="long"):
+    # Простейшие расчёты для TP и SL (можно усложнить)
+    sl_percentage = 0.02  # 2% стоп-лосс
+    tp_percentage = 0.05  # 5% тейк-профит
+    
+    if position_type == "long":
+        sl = current_price * (1 - sl_percentage)
+        tp = current_price * (1 + tp_percentage)
+    else:
+        sl = current_price * (1 + sl_percentage)
+        tp = current_price * (1 - tp_percentage)
+
+    return round(sl, 2), round(tp, 2)
+
 def get_price_change(symbol):
     klines = get_kline(symbol, "1m")
-    print(f"Полученные данные для {symbol}: {klines}")  # Логируем полученные данные для каждого символа
-
     if len(klines) >= 2:
-        # Берем цену закрытия последней и предыдущей свечи
-        last = float(klines[0]["close"])  # Используем цену закрытия первой свечи
-        prev = float(klines[1]["close"])  # Используем цену закрытия второй свечи
+        last = float(klines[0]["close"])
+        prev = float(klines[1]["close"])
         diff = last - prev
         
-        # Логика для определения цвета на основе изменений в цене
         if diff > 0:
             color = "🟢"
         elif diff < 0:
@@ -71,9 +77,26 @@ def get_price_change(symbol):
         else:
             color = "⚪"
         
-        return f"{color} {symbol.replace('-USDT','')}: {last:.2f}"
+        return last, f"{color} {symbol.replace('-USDT','')}: {last:.2f}"
     
-    return f"⚠️ {symbol.replace('-USDT','')}: данных нет"
+    return None, f"⚠️ {symbol.replace('-USDT','')}: данных нет"
+
+def analyze(symbol):
+    # Простейший анализ (можно добавить MACD, RSI, EMA и другие индикаторы)
+    current_price, price_message = get_price_change(symbol)
+    if current_price is None:
+        return price_message
+
+    # Пример анализа: в зависимости от цены решаем, лонг или шорт
+    if current_price > 100:  # Примерный порог для лонга
+        position_type = "long"
+    else:
+        position_type = "short"
+    
+    # Вычисляем TP и SL
+    sl, tp = calculate_tp_sl(current_price, position_type)
+    
+    return f"{price_message}\nРекомендуемый вход: {position_type.capitalize()}.\nTP: {tp}, SL: {sl}"
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -90,16 +113,17 @@ def start_bot():
         any_signals = False
         for symbol in symbols:
             try:
-                prices = get_price_change(symbol)
-                if "данных нет" not in prices:
-                    send_telegram_message(prices)  # Если есть данные — отправляем в Telegram
-                    any_signals = True
+                signal = analyze(symbol)
+                send_telegram_message(signal)
+                any_signals = True
             except Exception as e:
                 print(f"[Ошибка при анализе {symbol}] {e}")
+        
         if not any_signals:
-            msg = "Бот работает. Пока точек входа не найдено.\nТекущие цены:\n" + "\n".join([get_price_change(sym) for sym in symbols])
+            msg = "Бот работает. Пока точек входа не найдено.\nТекущие цены:\n" + "\n".join([analyze(sym) for sym in symbols])
             send_telegram_message(msg)
-        time.sleep(1800)
+        
+        time.sleep(1800)  # Проверка каждые 30 минут
 
 @app.route('/')
 def home():
