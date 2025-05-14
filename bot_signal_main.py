@@ -6,17 +6,14 @@ import hashlib
 import requests
 import json
 import pandas as pd
-import threading
-from dotenv import load_dotenv
 from ta.momentum import RSIIndicator, WilliamsRIndicator
 from ta.trend import MACD, EMAIndicator
 
-load_dotenv()
-
+# Получаем переменные из Render Environment
 API_KEY = os.getenv("BINGX_API_KEY")
 API_SECRET = os.getenv("BINGX_API_SECRET")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") or "твой_токен"
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or "твой_ID"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 symbols = ["BTC-USDT", "TIA-USDT", "PEOPLE-USDT", "POPCAT-USDT", "DOGE-USDT"]
 base_url = "https://open-api.bingx.com/openApi/swap/quote/v1/kline"
@@ -73,7 +70,7 @@ def send_telegram_message(message):
         response.raise_for_status()
         print(f"Сообщение отправлено: {message}")
     except requests.exceptions.RequestException as e:
-        print(f"Ошибка отправки сообщения: {e}")
+        print(f"Ошибка отправки в Telegram: {e}")
 
 def analyze_symbol(symbol):
     raw = get_kline(symbol)
@@ -83,7 +80,7 @@ def analyze_symbol(symbol):
 
     macd, rsi, wr, ema = get_indicators(df)
     resistance, support = get_levels(df)
-    last_price = df["close"].iloc[-1]
+    last_price = float(df["close"].iloc[-1])
     signal = None
 
     if macd > 0 and rsi > 45 and wr > -80 and last_price > ema:
@@ -99,25 +96,21 @@ def analyze_symbol(symbol):
         msg = (
             f"Монета: {symbol.replace('-USDT','')}\n"
             f"Сигнал: {signal}\n"
-            f"Цена: {last_price:.2f}\n"
-            f"TP: {tp:.2f}, SL: {sl:.2f}\n"
+            f"Цена входа: {last_price:.2f}\n"
+            f"TP: {tp:.2f}\n"
+            f"SL: {sl:.2f}\n"
             f"MACD: {macd:.4f}, RSI: {rsi:.2f}, WR: {wr:.2f}, EMA: {ema:.2f}"
         )
         send_telegram_message(msg)
 
-def bot_loop():
-    while True:
-        for symbol in symbols:
-            try:
-                analyze_symbol(symbol)
-            except Exception as e:
-                print(f"Ошибка для {symbol}: {e}")
-        time.sleep(300)
-
-# Запуск бота в фоновом потоке
-@app.before_first_request
-def activate_bot():
-    threading.Thread(target=bot_loop, daemon=True).start()
+@app.route('/run')
+def run_bot_once():
+    for symbol in symbols:
+        try:
+            analyze_symbol(symbol)
+        except Exception as e:
+            print(f"Ошибка для {symbol}: {e}")
+    return "Анализ завершён и сигналы отправлены."
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000)
