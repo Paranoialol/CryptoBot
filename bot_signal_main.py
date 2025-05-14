@@ -34,7 +34,10 @@ def get_kline(symbol, interval="1m"):
         signed = sign_request(params.copy())
         res = requests.get(base_url, headers=headers, params=signed)
         res.raise_for_status()
-        return res.json().get("data", [])
+        data = res.json().get("data", [])
+        # Логируем ответ API
+        print(f"[API Response] {symbol}: {data}")
+        return data
     except Exception as e:
         print(f"[Ошибка get_kline] {symbol}: {e}")
         return []
@@ -54,21 +57,6 @@ def get_price_change(symbol):
         return f"{color} {symbol.replace('-USDT','')}: {last:.2f}"
     return f"⚠️ {symbol.replace('-USDT','')}: данных нет"
 
-def get_indicators(df):
-    df["close"] = df["close"].astype(float)
-    macd = MACD(close=df["close"]).macd_diff().iloc[-1]
-    rsi = RSIIndicator(close=df["close"]).rsi().iloc[-1]
-    wr = WilliamsRIndicator(high=df["high"], low=df["low"], close=df["close"]).williams_r().iloc[-1]
-    ema = EMAIndicator(close=df["close"], window=20).ema_indicator().iloc[-1]
-    return macd, rsi, wr, ema
-
-def get_levels(df):
-    high = df["high"].astype(float)
-    low = df["low"].astype(float)
-    resistance = max(high[-20:])
-    support = min(low[-20:])
-    return resistance, support
-
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
@@ -79,52 +67,19 @@ def send_telegram_message(message):
     except Exception as e:
         print("Ошибка при отправке:", e)
 
-def analyze_symbol(symbol):
-    found = False
-    for interval in ["1m", "5m", "15m", "1h"]:
-        raw = get_kline(symbol, interval)
-        if not raw:
-            continue
-        df = pd.DataFrame(raw)
-        df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
-        df = df.astype(float)
-
-        macd, rsi, wr, ema = get_indicators(df)
-        resistance, support = get_levels(df)
-        last_price = float(df["close"].iloc[-1])
-
-        if macd > 0 and rsi > 45 and wr > -80 and last_price > ema:
-            signal = "ЛОНГ"
-        elif macd < 0 and rsi < 55 and wr < -20 and last_price < ema:
-            signal = "ШОРТ"
-        else:
-            continue
-
-        msg = (
-            f"Монета: {symbol.replace('-USDT','')}\n"
-            f"Таймфрейм: {interval}\n"
-            f"Сигнал: {signal}\n"
-            f"Цена: {last_price:.2f}\n"
-            f"TP: {resistance:.2f} | SL: {support:.2f}\n"
-            f"MACD: {macd:.4f}, RSI: {rsi:.2f}, WR: {wr:.2f}, EMA: {ema:.2f}"
-        )
-        send_telegram_message(msg)
-        found = True
-        break
-    return found
-
 def start_bot():
     while True:
         any_signals = False
         for symbol in symbols:
             try:
-                if analyze_symbol(symbol):
+                prices = get_price_change(symbol)
+                if "данных нет" not in prices:
+                    send_telegram_message(prices)  # Если есть данные — отправляем в Telegram
                     any_signals = True
             except Exception as e:
-                print(f"[Анализ ошибки] {symbol}: {e}")
+                print(f"[Ошибка при анализе {symbol}] {e}")
         if not any_signals:
-            prices = [get_price_change(sym) for sym in symbols]
-            msg = "Бот работает. Пока точек входа не найдено.\nТекущие цены:\n" + "\n".join(prices)
+            msg = "Бот работает. Пока точек входа не найдено.\nТекущие цены:\n" + "\n".join([get_price_change(sym) for sym in symbols])
             send_telegram_message(msg)
         time.sleep(1800)
 
