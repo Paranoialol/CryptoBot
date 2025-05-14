@@ -1,69 +1,54 @@
 import os
 import time
-import requests
 import hmac
 import hashlib
-import logging
-import pandas as pd
+import requests
+from urllib.parse import urlencode
 
-# Настройка логгирования
-logging.basicConfig(level=logging.INFO)
+# Получаем API-ключ и секретный ключ из переменных среды
+API_KEY = os.getenv('BINGX_API_KEY')
+API_SECRET = os.getenv('BINGX_API_SECRET')
 
-# Получаем ключи из переменных окружения
-API_KEY = os.environ.get("BINGX_API_KEY")
-API_SECRET = os.environ.get("BINGX_API_SECRET")
+# Убедись, что переменные установлены корректно
+if not API_KEY or not API_SECRET:
+    raise ValueError("API-ключ и секретный ключ не установлены в переменных среды.")
 
-# Параметры
-SYMBOLS = ['BTC-USDT', 'ETH-USDT', 'PEOPLE-USDT', 'DOGE-USDT']
-INTERVAL = '1m'
-LIMIT = 100
-BASE_URL = "https://open-api.bingx.com"
+BASE_URL = 'https://api.bingx.com/api/v1/futures/market/candles'
 
-# Функция генерации подписи
-def sign(params: dict, secret_key: str):
-    sorted_params = sorted(params.items())
-    encoded = "&".join([f"{k}={v}" for k, v in sorted_params])
-    signature = hmac.new(secret_key.encode(), encoded.encode(), hashlib.sha256).hexdigest()
-    return signature
+# Формируем параметры для запроса
+params = {
+    'symbol': 'BTC-USDT',
+    'interval': '1m',
+    'limit': 100
+}
 
-# Функция получения свечей (Klines)
-def get_klines(symbol):
-    endpoint = "/openApi/futures/market/kline"
-    url = BASE_URL + endpoint
-    timestamp = int(time.time() * 1000)
-    params = {
-        "symbol": symbol,
-        "interval": INTERVAL,
-        "limit": LIMIT,
-        "timestamp": timestamp
-    }
-    params["signature"] = sign(params, API_SECRET)
-    headers = {
-        "X-BX-APIKEY": API_KEY
-    }
+# Добавляем параметры в запрос
+query_string = urlencode(params)
 
-    try:
-        response = requests.get(url, params=params, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-        candles = data.get("data", [])
-        if not candles:
-            logging.warning(f"Пустые данные по {symbol}")
-            return None
-        df = pd.DataFrame(candles)
-        df.columns = ['open_time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'quote_volume', 'count', 'taker_buy_volume', 'taker_buy_quote_volume', 'ignore']
-        df['close'] = df['close'].astype(float)
-        return df
-    except Exception as e:
-        logging.warning(f"Ошибка запроса {symbol}: {e}")
-        return None
+# Получаем текущую метку времени в миллисекундах
+timestamp = str(int(time.time() * 1000))  # Текущая метка времени в миллисекундах
+params['timestamp'] = timestamp
 
-# Основной цикл
-def main():
-    for symbol in SYMBOLS:
-        df = get_klines(symbol)
-        if df is not None:
-            logging.info(f"Последняя свеча по {symbol}: {df.iloc[-1]['close']}")
+# Создаем строку запроса для подписи
+signature_payload = urlencode(params)
 
-if __name__ == "__main__":
-    main()
+# Создаем подпись с использованием секретного ключа
+signature = hmac.new(API_SECRET.encode('utf-8'), signature_payload.encode('utf-8'), hashlib.sha256).hexdigest()
+
+# Добавляем подпись в параметры запроса
+params['signature'] = signature
+
+# Заголовки для аутентификации
+headers = {
+    'X-BINGX-API-KEY': API_KEY
+}
+
+# Выполним запрос с аутентификацией
+response = requests.get(BASE_URL, headers=headers, params=params)
+
+# Проверяем результат
+if response.status_code == 200:
+    print("Ответ:", response.json())
+else:
+    print(f"Ошибка: {response.status_code}")
+    print(response.text)
