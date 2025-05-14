@@ -5,7 +5,8 @@ import hashlib
 import threading
 import requests
 import json
-import talib as ta
+import pandas as pd
+import pandas_ta as ta  # Используем pandas_ta
 import numpy as np
 from urllib.parse import urlencode
 from flask import Flask
@@ -53,39 +54,40 @@ def get_kline(symbol, interval="1m", limit=200):
         return []
 
 def calculate_indicators(klines):
-    closes = np.array([float(kline["close"]) for kline in klines])
-    opens = np.array([float(kline["open"]) for kline in klines])
-    highs = np.array([float(kline["high"]) for kline in klines])
-    lows = np.array([float(kline["low"]) for kline in klines])
-    volumes = np.array([float(kline["volume"]) for kline in klines])
+    df = pd.DataFrame(klines)
+    df["close"] = df["close"].astype(float)
+    df["open"] = df["open"].astype(float)
+    df["high"] = df["high"].astype(float)
+    df["low"] = df["low"].astype(float)
+    df["volume"] = df["volume"].astype(float)
 
     # MACD
-    macd, macd_signal, _ = ta.MACD(closes, fastperiod=12, slowperiod=26, signalperiod=9)
+    macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
 
     # RSI
-    rsi = ta.RSI(closes, timeperiod=14)
+    rsi = ta.rsi(df["close"], length=14)
 
     # EMA
-    ema = ta.EMA(closes, timeperiod=21)
+    ema = ta.ema(df["close"], length=21)
 
     # Bollinger Bands
-    upperband, middleband, lowerband = ta.BBANDS(closes, timeperiod=20, nbdevup=2, nbdevdn=2, matype=0)
+    bbands = ta.bbands(df["close"], length=20, std=2)
 
     # Stochastic Oscillator
-    slowk, slowd = ta.STOCH(highs, lows, closes, fastk_period=14, slowk_period=3, slowk_matype=0, slowd_period=3, slowd_matype=0)
+    stoch = ta.stoch(df["high"], df["low"], df["close"], fastk_period=14, slowk_period=3, slowd_period=3)
 
     return {
-        "macd": macd[-1],
-        "macd_signal": macd_signal[-1],
-        "rsi": rsi[-1],
-        "ema": ema[-1],
-        "upperband": upperband[-1],
-        "lowerband": lowerband[-1],
-        "slowk": slowk[-1],
-        "slowd": slowd[-1],
-        "volume": volumes[-1],
-        "ema_previous": ema[-2],  # предыдущий EMA для сравнения
-        "volume_previous": volumes[-2]  # предыдущий объем
+        "macd": macd["MACD"].iloc[-1],
+        "macd_signal": macd["MACDs"].iloc[-1],
+        "rsi": rsi.iloc[-1],
+        "ema": ema.iloc[-1],
+        "upperband": bbands["BBU_20_2.0"].iloc[-1],
+        "lowerband": bbands["BBL_20_2.0"].iloc[-1],
+        "slowk": stoch["STOCHk_14_3_3"].iloc[-1],
+        "slowd": stoch["STOCHd_14_3_3"].iloc[-1],
+        "volume": df["volume"].iloc[-1],
+        "ema_previous": ema.iloc[-2],  # предыдущий EMA для сравнения
+        "volume_previous": df["volume"].iloc[-2]  # предыдущий объем
     }
 
 def get_signal(symbol):
@@ -127,7 +129,7 @@ def start_bot():
             except Exception as e:
                 print(f"[Ошибка при анализе {symbol}] {e}")
         if not any_signals:
-            msg = "Бот работает. Пока точек входа не найдено.\nТекущие цены:\n" + "\n".join([get_signal(sym) for sym in symbols])
+            msg = "Бот работает, мой господин. Пока точек входа не найдено. я постараюсь работать лучше.\nТекущие цены:\n" + "\n".join([get_signal(sym) for sym in symbols])
             send_telegram_message(msg)
         time.sleep(300)
 
