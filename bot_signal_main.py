@@ -7,7 +7,6 @@ import requests
 import json
 import pandas as pd
 import pandas_ta as ta
-import numpy as np
 from urllib.parse import urlencode
 from flask import Flask
 
@@ -29,7 +28,7 @@ def sign_request(params):
     params["signature"] = signature
     return params
 
-def get_kline(symbol, interval="1m", limit=200):
+def get_kline(symbol, interval="1m", limit=500):  # Увеличен лимит
     path = '/openApi/swap/v3/quote/klines'
     params = {
         "symbol": symbol,
@@ -43,11 +42,11 @@ def get_kline(symbol, interval="1m", limit=200):
         res = requests.get(url, headers=headers)
         res.raise_for_status()
         response_data = res.json()
-
         if 'data' in response_data and response_data['data']:
+            print(f"[{symbol}] Получено {len(response_data['data'])} свечей")
             return response_data['data']
         else:
-            print(f"[Ответ от API] Нет данных для {symbol}")
+            print(f"[{symbol}] Нет данных от API")
             return []
     except Exception as e:
         print(f"[Ошибка get_kline] {symbol}: {e}")
@@ -61,58 +60,50 @@ def calculate_indicators(klines):
     df["low"] = df["low"].astype(float)
     df["volume"] = df["volume"].astype(float)
 
-    macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
-    if macd is None or macd.isnull().values.any() or "MACD" not in macd or "MACDs" not in macd:
-        raise ValueError("Недостаточно данных для MACD")
+    df.dropna(inplace=True)
 
-    rsi = ta.rsi(df["close"], length=14)
-    if rsi.isnull().values.any():
-        raise ValueError("Недостаточно данных для RSI")
+    try:
+        macd = ta.macd(df["close"], fast=12, slow=26, signal=9).dropna()
+        rsi = ta.rsi(df["close"], length=14).dropna()
+        ema = ta.ema(df["close"], length=21).dropna()
+        bbands = ta.bbands(df["close"], length=20, std=2).dropna()
+        stoch = ta.stoch(df["high"], df["low"], df["close"], fastk=14, slowk=3, slowd=3).dropna()
 
-    ema = ta.ema(df["close"], length=21)
-    if ema.isnull().values.any():
-        raise ValueError("Недостаточно данных для EMA")
+        if len(macd) == 0:
+            raise ValueError("Недостаточно данных для MACD")
 
-    bbands = ta.bbands(df["close"], length=20, std=2)
-    if bbands.isnull().values.any():
-        raise ValueError("Недостаточно данных для Bollinger Bands")
-
-    stoch = ta.stoch(df["high"], df["low"], df["close"], fastk_period=14, slowk_period=3, slowd_period=3)
-    if stoch.isnull().values.any():
-        raise ValueError("Недостаточно данных для Stochastic")
-
-    return {
-        "macd": macd["MACD"].iloc[-1],
-        "macd_signal": macd["MACDs"].iloc[-1],
-        "rsi": rsi.iloc[-1],
-        "ema": ema.iloc[-1],
-        "upperband": bbands["BBU_20_2.0"].iloc[-1],
-        "lowerband": bbands["BBL_20_2.0"].iloc[-1],
-        "slowk": stoch["STOCHk_14_3_3"].iloc[-1],
-        "slowd": stoch["STOCHd_14_3_3"].iloc[-1],
-        "volume": df["volume"].iloc[-1],
-        "ema_previous": ema.iloc[-2],
-        "volume_previous": df["volume"].iloc[-2]
-    }
+        return {
+            "macd": macd["MACD"].iloc[-1],
+            "macd_signal": macd["MACDs"].iloc[-1],
+            "rsi": rsi.iloc[-1],
+            "ema": ema.iloc[-1],
+            "upperband": bbands["BBU_20_2.0"].iloc[-1],
+            "lowerband": bbands["BBL_20_2.0"].iloc[-1],
+            "slowk": stoch["STOCHk_14_3_3"].iloc[-1],
+            "slowd": stoch["STOCHd_14_3_3"].iloc[-1],
+            "volume": df["volume"].iloc[-1],
+            "ema_previous": ema.iloc[-2] if len(ema) > 1 else ema.iloc[-1],
+            "volume_previous": df["volume"].iloc[-2] if len(df) > 1 else df["volume"].iloc[-1]
+        }
+    except Exception as e:
+        print(f"[Ошибка индикаторов] {e}")
+        return None
 
 def get_signal(symbol):
-    try:
-        klines = get_kline(symbol, "1m")
-        if len(klines) >= 50:
-            indicators = calculate_indicators(klines)
-
-            if indicators["macd"] > indicators["macd_signal"] and indicators["rsi"] < 30 and indicators["volume"] > indicators["volume_previous"]:
-                if indicators["ema"] < indicators["ema_previous"]:
-                    return f"🔵 {symbol.replace('-USDT','')}: Лонг\nTP: {round(indicators['ema'] * 1.03, 5)}, SL: {round(indicators['ema'] * 0.97, 5)}"
-            elif indicators["macd"] < indicators["macd_signal"] and indicators["rsi"] > 70 and indicators["volume"] > indicators["volume_previous"]:
-                if indicators["ema"] > indicators["ema_previous"]:
-                    return f"🔴 {symbol.replace('-USDT','')}: Шорт\nTP: {round(indicators['ema'] * 0.97, 5)}, SL: {round(indicators['ema'] * 1.03, 5)}"
-            else:
-                return f"⚪ {symbol.replace('-USDT','')}: Нет сигнала"
-        return f"⚠️ {symbol.replace('-USDT','')}: Недостаточно данных"
-    except Exception as e:
-        print(f"[Ошибка get_signal] {symbol}: {e}")
-        return f"⚠️ {symbol.replace('-USDT','')}: Недостаточно данных ({str(e)})"
+    klines = get_kline(symbol)
+    if len(klines) >= 50:
+        indicators = calculate_indicators(klines)
+        if not indicators:
+            return f"⚠️ {symbol.replace('-USDT','')}: Недостаточно данных (Недостаточно данных для MACD)"
+        if indicators["macd"] > indicators["macd_signal"] and indicators["rsi"] < 30 and indicators["volume"] > indicators["volume_previous"]:
+            if indicators["ema"] < indicators["ema_previous"]:
+                return f"🔵 {symbol.replace('-USDT','')}: Лонг\nTP: {round(indicators['ema'] * 1.03, 5)}, SL: {round(indicators['ema'] * 0.97, 5)}"
+        elif indicators["macd"] < indicators["macd_signal"] and indicators["rsi"] > 70 and indicators["volume"] > indicators["volume_previous"]:
+            if indicators["ema"] > indicators["ema_previous"]:
+                return f"🔴 {symbol.replace('-USDT','')}: Шорт\nTP: {round(indicators['ema'] * 0.97, 5)}, SL: {round(indicators['ema'] * 1.03, 5)}"
+        else:
+            return f"⚪ {symbol.replace('-USDT','')}: Нет сигнала"
+    return f"⚠️ {symbol.replace('-USDT','')}: Недостаточно данных"
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -120,20 +111,20 @@ def send_telegram_message(message):
     try:
         res = requests.post(url, data=payload)
         if not res.ok:
-            print("Ошибка отправки:", res.text)
+            print("Ошибка Telegram:", res.text)
     except Exception as e:
-        print("Ошибка при отправке в Telegram:", e)
+        print("Ошибка отправки в Telegram:", e)
 
 def start_bot():
     while True:
-        all_signals = []
+        full_message = "My CryptoFTW bot:\n"
         for symbol in symbols:
-            signal = get_signal(symbol)
-            all_signals.append(signal)
-            time.sleep(1)  # Чтобы не заспамить API
-
-        send_telegram_message("My CryptoFTW bot:\n\n" + "\n\n".join(all_signals))
-        print("[LOG] Цикл анализа завершён. Ожидание 5 минут...")
+            try:
+                signal = get_signal(symbol)
+                full_message += f"\n{signal}"
+            except Exception as e:
+                print(f"[Ошибка при анализе {symbol}] {e}")
+        send_telegram_message(full_message)
         time.sleep(300)
 
 @app.route('/')
