@@ -10,7 +10,6 @@ from flask import Flask
 from ta.momentum import RSIIndicator, WilliamsRIndicator
 from ta.trend import MACD, EMAIndicator
 
-# === Константы ===
 API_KEY = os.getenv("BINGX_API_KEY")
 API_SECRET = os.getenv("BINGX_API_SECRET")
 TELEGRAM_TOKEN = "8031738383:AAE3zxHvhSFhbTESh0dxEPaoODCrPnuOIxw"
@@ -23,25 +22,38 @@ headers = {"X-BX-APIKEY": API_KEY}
 app = Flask(__name__)
 bot_started = False
 
-# === Подпись запроса BingX ===
 def sign_request(params):
     query = '&'.join(f"{k}={v}" for k, v in sorted(params.items()))
     signature = hmac.new(API_SECRET.encode(), query.encode(), hashlib.sha256).hexdigest()
     params["signature"] = signature
     return params
 
-# === Получение свечей с биржи ===
 def get_kline(symbol, interval="1m"):
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "limit": 3
-    }
-    signed = sign_request(params.copy())
-    res = requests.get(base_url, headers=headers, params=signed)
-    return res.json().get("data", [])
+    params = {"symbol": symbol, "interval": interval, "limit": 2}
+    try:
+        signed = sign_request(params.copy())
+        res = requests.get(base_url, headers=headers, params=signed)
+        res.raise_for_status()
+        return res.json().get("data", [])
+    except Exception as e:
+        print(f"[Ошибка get_kline] {symbol}: {e}")
+        return []
 
-# === Индикаторы ===
+def get_price_change(symbol):
+    klines = get_kline(symbol, "1m")
+    if len(klines) >= 2:
+        last = float(klines[-1][4])
+        prev = float(klines[-2][4])
+        diff = last - prev
+        if diff > 0:
+            color = "🟢"
+        elif diff < 0:
+            color = "🔴"
+        else:
+            color = "⚪"
+        return f"{color} {symbol.replace('-USDT','')}: {last:.2f}"
+    return f"⚠️ {symbol.replace('-USDT','')}: данных нет"
+
 def get_indicators(df):
     df["close"] = df["close"].astype(float)
     macd = MACD(close=df["close"]).macd_diff().iloc[-1]
@@ -50,7 +62,6 @@ def get_indicators(df):
     ema = EMAIndicator(close=df["close"], window=20).ema_indicator().iloc[-1]
     return macd, rsi, wr, ema
 
-# === Уровни ===
 def get_levels(df):
     high = df["high"].astype(float)
     low = df["low"].astype(float)
@@ -58,15 +69,16 @@ def get_levels(df):
     support = min(low[-20:])
     return resistance, support
 
-# === Telegram ===
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "HTML"
-    }
-# === Анализ монеты ===
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
+    try:
+        res = requests.post(url, data=payload)
+        if not res.ok:
+            print("Ошибка отправки:", res.text)
+    except Exception as e:
+        print("Ошибка при отправке:", e)
+
 def analyze_symbol(symbol):
     found = False
     for interval in ["1m", "5m", "15m", "1h"]:
@@ -99,36 +111,8 @@ def analyze_symbol(symbol):
         send_telegram_message(msg)
         found = True
         break
-
     return found
 
-# === Получение текущих цен и направления ===
-def get_all_prices():
-    text = "Текущие цены:\n"
-    for symbol in symbols:
-        raw = get_kline(symbol)
-        name = symbol.replace("-USDT", "")
-        if not raw or len(raw) < 2:
-            text += f"<b>{name}</b>: данных нет\n"
-            continue
-        try:
-            df = pd.DataFrame(raw)
-            df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
-            df = df.astype(float)
-            price_now = df["close"].iloc[-1]
-            price_prev = df["close"].iloc[-2]
-            if price_now > price_prev:
-                trend = "🟢🔼"
-            elif price_now < price_prev:
-                trend = "🔴🔽"
-            else:
-                trend = "⚪️⏸"
-            text += f"<b>{name}</b>: {price_now:.4f} {trend}\n"
-        except:
-            text += f"<b>{name}</b>: ошибка данных\n"
-    return text
-
-# === Главная функция ===
 def start_bot():
     while True:
         any_signals = False
@@ -137,13 +121,13 @@ def start_bot():
                 if analyze_symbol(symbol):
                     any_signals = True
             except Exception as e:
-                print(f"Ошибка анализа {symbol}: {e}")
+                print(f"[Анализ ошибки] {symbol}: {e}")
         if not any_signals:
-            message = "Бот работает. Пока точек входа не найдено.\n" + get_all_prices()
-            send_telegram_message(message)
+            prices = [get_price_change(sym) for sym in symbols]
+            msg = "Бот работает. Пока точек входа не найдено.\nТекущие цены:\n" + "\n".join(prices)
+            send_telegram_message(msg)
         time.sleep(1800)
 
-# === Запуск при переходе по Render-ссылке ===
 @app.route('/')
 def home():
     global bot_started
