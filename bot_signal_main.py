@@ -101,47 +101,6 @@ def send_telegram_message(message):
         print(f"Ошибка Telegram: {e}")
 
 
-btc_levels = {
-    "resistance": [93400, 94000, 94700],
-    "support": [92700, 91800, 90600],
-    "danger": [89800],
-    "breakout": [95500]
-}
-
-
-def check_btc_levels():
-    symbol = "BTC-USDT"
-    klines = get_kline(symbol)
-    if not klines:
-        return
-
-    price = float(klines[-1]["close"])
-    ind = calculate_indicators(klines)
-    if not ind:
-        return
-
-    pattern = ind.get("pattern", "")
-    text = f"\n<b>BTC/USDT: {price:.2f}</b>\n{pattern}\n"
-
-    for level in btc_levels["resistance"]:
-        if abs(price - level) <= 20:
-            text += f"\n⚠️ <b>Сопротивление {level}</b> — возможна фиксация прибыли или шорт"
-
-    for level in btc_levels["support"]:
-        if abs(price - level) <= 20:
-            text += f"\n🟢 <b>Поддержка {level}</b> — возможен вход в лонг"
-
-    for level in btc_levels["breakout"]:
-        if price >= level:
-            text += f"\n🚀 <b>Пробой {level}!</b> Возможен импульс вверх"
-
-    for level in btc_levels["danger"]:
-        if price <= level:
-            text += f"\n🔻 <b>Опасная зона {level}</b> — будь осторожен!"
-
-    send_telegram_message(text)
-
-
 def analyze():
     intervals = {
         "1m": "ТФ 1m",
@@ -163,16 +122,20 @@ def analyze():
             if not indicators:
                 continue
 
-            price = float(klines[-1]["close"])
-            volume_now = float(klines[-1]["volume"])
-            volume_prev = float(klines[-2]["volume"])
+            df = pd.DataFrame(klines)
+            df["close"] = pd.to_numeric(df["close"], errors="coerce")
+            price = float(df["close"].iloc[-1])
+            ema21 = df["close"].rolling(window=21).mean().iloc[-1]
+
+            volume_now = float(df["volume"].iloc[-1])
+            volume_prev = float(df["volume"].iloc[-2])
             volume_trend = "🔺 растут" if volume_now > volume_prev else "🔻 падают"
 
-            trend = "восходящий" if price > float(pd.DataFrame(klines)["close"].rolling(window=21).mean().iloc[-1]) else "нисходящий"
+            trend = "восходящий" if price > ema21 else "нисходящий"
 
             message += (
                 f"{label}:\n"
-                f"Цена: {price:.4f} USDT | EMA(21): {pd.DataFrame(klines)['close'].rolling(window=21).mean().iloc[-1]:.4f} — тренд {trend}\n"
+                f"Цена: {price:.4f} USDT | EMA(21): {ema21:.4f} — тренд {trend}\n"
                 f"MACD: {indicators['macd']:.4f} vs сигнальная {indicators['signal']:.4f} — {'бычий' if indicators['macd'] > indicators['signal'] else 'медвежий'}\n"
                 f"RSI: {indicators['rsi']:.2f} ({'норма' if 30 < indicators['rsi'] < 70 else '⚠️'})\n"
                 f"WR: {indicators['wr']:.2f} ({'🔻 перепродан' if indicators['wr'] < -80 else '🔺 перекуплен' if indicators['wr'] > -20 else 'норма'})\n"
@@ -185,7 +148,6 @@ def analyze():
             send_telegram_message(message)
 
 
-
 def run_bot():
     global bot_started
     if bot_started:
@@ -194,7 +156,6 @@ def run_bot():
     while True:
         try:
             analyze()
-            check_btc_levels()
         except Exception as e:
             print(f"Ошибка в боте: {e}")
         time.sleep(300)  # 5 минут
