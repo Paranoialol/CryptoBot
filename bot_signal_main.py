@@ -144,18 +144,72 @@ def get_signal(symbol):
     if price > indicators["fibo_5"]:
         fibo_zone = "Цена выше уровня 0.5 по Фибоначчи — возможен потенциал роста."
     else:
-        fibo_zone = "Цена ниже уровня 0.5 по Фибоначчи — возможно давление продавцов."
+def get_signal(symbol):
+    klines = get_kline(symbol)
+    if not klines or len(klines) < 50:
+        return None
+
+    indicators = calculate_indicators(klines)
+    if not indicators:
+        return None
+
+    price = indicators["price"]
+    ema = indicators["ema"]
+    ema_prev = indicators["ema_prev"]
+    macd = indicators["macd"]
+    macd_signal = indicators["macd_signal"]
+    rsi = indicators["rsi"]
+    wr = indicators["wr"]
+    volume = indicators["volume"]
+    volume_prev = indicators["volume_prev"]
+    atr = indicators["atr"]
+
+    # Тренд по EMA
+    trend = "восходящий" if price > ema else "нисходящий"
+
+    # Объемы
+    volume_trend = "растут" if volume > volume_prev else "снижаются"
+
+    # MACD тренд
+    if macd > macd_signal:
+        macd_trend = "бычий сигнал"
+    elif macd < macd_signal:
+        macd_trend = "медвежий сигнал"
+    else:
+        macd_trend = "без яркого сигнала"
+
+    # RSI зоны
+    if rsi < 30:
+        rsi_zone = "перепроданность (возможен разворот вверх)"
+    elif rsi > 70:
+        rsi_zone = "перекупленность (возможна коррекция)"
+    else:
+        rsi_zone = "нейтральная зона"
+
+    # Williams %R зоны
+    if wr < -80:
+        wr_zone = "перепроданность (потенциал роста)"
+    elif wr > -20:
+        wr_zone = "перекупленность (потенциал снижения)"
+    else:
+        wr_zone = "нейтральная зона"
+
+    # Фибо зона
+    fibo_zone = ""
+    if price > indicators["fibo_5"]:
+        fibo_zone = "Цена выше 0.5 по Фибо — потенциал роста."
+    elif price < indicators["fibo_5"]:
+        fibo_zone = "Цена ниже 0.5 по Фибо — давление продавцов."
 
     msg = f"Монета *{symbol.replace('-USDT','')}*\n"
-    msg += f"Текущая цена: {price:.4f} USDT\n"
-    msg += f"Тренд: {trend} (EMA 21 {ema_trend})\n"
-    msg += f"Объёмы {volume_trend}, что говорит о {'возрастающем интересе' if volume > volume_prev else 'снижении активности'}\n"
+    msg += f"Цена: {price:.4f} USDT\n"
+    msg += f"Тренд: {trend}, объёмы {volume_trend}\n"
     msg += f"MACD: {macd:.4f} ({macd_trend})\n"
     msg += f"RSI: {rsi:.2f} ({rsi_zone})\n"
     msg += f"Williams %R: {wr:.2f} ({wr_zone})\n"
     msg += f"{fibo_zone}\n"
 
-    # Условия на вход в лонг
+    # Условия для входа в ЛОНГ
     long_conditions = (
         macd > macd_signal
         and rsi < 50
@@ -164,7 +218,7 @@ def get_signal(symbol):
         and price > ema
     )
 
-    # Условия на вход в шорт
+    # Условия для входа в ШОРТ
     short_conditions = (
         macd < macd_signal
         and rsi > 60
@@ -177,22 +231,20 @@ def get_signal(symbol):
         tp = price + 1.5 * atr
         sl = price - 1 * atr
         msg += "\n*Сигнал на вход в ЛОНГ:*\n"
-        msg += f"Рекомендуется вход от {price:.4f} USDT\n"
-        msg += f"Цель (TP): {tp:.4f} USDT, Стоп-лосс (SL): {sl:.4f} USDT\n"
-        msg += "Обратите внимание на подтверждающие сигналы объёмов и тренда."
+        msg += f"Вход от {price:.4f}, TP: {tp:.4f}, SL: {sl:.4f}"
         return msg
 
     elif short_conditions:
         tp = price - 1.5 * atr
         sl = price + 1 * atr
         msg += "\n*Сигнал на вход в ШОРТ:*\n"
-        msg += f"Рекомендуется вход от {price:.4f} USDT\n"
-        msg += f"Цель (TP): {tp:.4f} USDT, Стоп-лосс (SL): {sl:.4f} USDT\n"
-        msg += "Обратите внимание на подтверждающие сигналы объёмов и тренда."
+        msg += f"Вход от {price:.4f}, TP: {tp:.4f}, SL: {sl:.4f}"
         return msg
 
-    msg += "\nПока чётких сигналов на вход нет. Рекомендуется наблюдать за динамикой индикаторов и объёмов."
-    return msg
+    else:
+        msg += "\n⚪ Пока нет чётких сигналов на вход.\n"
+        msg += "Рекомендуется наблюдать за рынком и ждать подтверждения."
+        return msg
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
