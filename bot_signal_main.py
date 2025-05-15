@@ -167,11 +167,15 @@ def send_status_update():
     status = "Бот работает, мой господин. Текущие цены:\n"
     for symbol in symbols:
         klines = get_kline(symbol)
-        if klines:
-            last_price = float(klines[-1]["close"])
-            status += f"{symbol.replace('-USDT','')}: {last_price}\n"
+        if klines and len(klines) > 0:
+            try:
+                last_price = float(klines[-1]["close"])
+                status += f"{symbol.replace('-USDT','')}: {last_price}\n"
+            except Exception as e:
+                status += f"{symbol.replace('-USDT','')}: ошибка при получении цены ({e})\n"
+        else:
+            status += f"{symbol.replace('-USDT','')}: данные не получены\n"
     send_telegram_message(status)
-
 # Запускаем задачи по расписанию
 scheduler.add_job(analyze_and_send_signals, 'interval', minutes=5)
 scheduler.add_job(send_status_update, 'interval', minutes=30)
