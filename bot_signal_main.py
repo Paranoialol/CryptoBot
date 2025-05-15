@@ -1,15 +1,13 @@
+from flask import Flask
+from apscheduler.schedulers.background import BackgroundScheduler
 import os
 import time
 import hmac
 import hashlib
-import threading
 import requests
-import json
 import pandas as pd
 import pandas_ta as ta
 from urllib.parse import urlencode
-from flask import Flask
-import schedule  # <- добавляем schedule
 
 API_KEY = os.getenv("BINGX_API_KEY")
 API_SECRET = os.getenv("BINGX_API_SECRET")
@@ -21,8 +19,9 @@ base_url = "https://open-api.bingx.com"
 headers = {"X-BX-APIKEY": API_KEY}
 
 app = Flask(__name__)
+scheduler = BackgroundScheduler()
 
-last_sent_signals = {}  # Для фильтра от спама — хранит последний сигнал по каждой монете
+last_sent_signals = {}  # Для фильтрации спама сигналов, ключ — символ, значение — последний сигнал
 
 def sign_request(params):
     query = '&'.join(f"{k}={v}" for k, v in sorted(params.items()))
@@ -63,10 +62,9 @@ def calculate_indicators(klines):
         ema = ta.ema(df["close"], length=21).dropna()
         wr = ta.willr(df["high"], df["low"], df["close"], length=14).dropna()
         atr = ta.atr(df["high"], df["low"], df["close"], length=14).dropna()
+        boll = ta.bbands(df["close"], length=20, std=2)
         adx = ta.adx(df["high"], df["low"], df["close"], length=14).dropna()
-        boll = ta.bbands(df["close"], length=20, std=2).dropna()
 
-        # Фибоначчи на текущей цене (пример, можно расширить)
         fibo_618 = df["close"].iloc[-1] * 0.618
         fibo_5 = df["close"].iloc[-1] * 0.5
         fibo_382 = df["close"].iloc[-1] * 0.382
@@ -81,11 +79,11 @@ def calculate_indicators(klines):
             "volume": df["volume"].iloc[-1],
             "volume_prev": df["volume"].iloc[-2] if len(df) > 1 else df["volume"].iloc[-1],
             "atr": atr.iloc[-1],
-            "adx": adx["ADX_14"].iloc[-1],
+            "price": df["close"].iloc[-1],
             "boll_upper": boll["BBU_20_2.0"].iloc[-1],
             "boll_middle": boll["BBM_20_2.0"].iloc[-1],
             "boll_lower": boll["BBL_20_2.0"].iloc[-1],
-            "price": df["close"].iloc[-1],
+            "adx": adx["ADX_14"].iloc[-1],
             "fibo_618": fibo_618,
             "fibo_5": fibo_5,
             "fibo_382": fibo_382
@@ -94,43 +92,43 @@ def calculate_indicators(klines):
         send_telegram_message(f"Ошибка в расчете индикаторов: {e}")
         return None
 
-def is_fibo_touch(price, fib_level, tolerance=0.002):  # tolerance - 0.2%
-    return abs(price - fib_level) / fib_level < tolerance
-
 def get_signal(symbol):
     klines = get_kline(symbol)
     if not klines or len(klines) < 50:
-        return None  # Не присылаем спам, просто пропускаем
+        return None
 
     indicators = calculate_indicators(klines)
     if not indicators:
         return None
 
     price = indicators["price"]
-    fibo_touch = (
-        is_fibo_touch(price, indicators["fibo_618"]) or
-        is_fibo_touch(price, indicators["fibo_5"]) or
-        is_fibo_touch(price, indicators["fibo_382"])
-    )
-    # Логика подтверждения по индикаторам + касание фибоначчи
+    fibo_levels = {
+        "0.382": indicators["fibo_382"],
+        "0.5": indicators["fibo_5"],
+        "0.618": indicators["fibo_618"],
+    }
+
+    # Пример простого фильтра для уровней Фибоначчи: цена должна быть в пределах 0.5% от уровня
+    fibo_touch = any(abs(price - lvl) / lvl < 0.005 for lvl in fibo_levels.values())
+
     long_conditions = (
-        indicators["macd"] > indicators["macd_signal"]
-        and indicators["rsi"] < 50
-        and indicators["wr"] < -80
-        and indicators["volume"] > indicators["volume_prev"]
-        and indicators["price"] > indicators["ema"]
-        and indicators["adx"] > 20
-        and fibo_touch
+        indicators["macd"] > indicators["macd_signal"] and
+        indicators["rsi"] < 50 and
+        indicators["wr"] < -80 and
+        indicators["volume"] > indicators["volume_prev"] and
+        indicators["price"] > indicators["ema"] and
+        indicators["adx"] > 20 and  # тренд сильный
+        fibo_touch
     )
 
     short_conditions = (
-        indicators["macd"] < indicators["macd_signal"]
-        and indicators["rsi"] > 60
-        and indicators["wr"] > -20
-        and indicators["volume"] > indicators["volume_prev"]
-        and indicators["price"] < indicators["ema"]
-        and indicators["adx"] > 20
-        and fibo_touch
+        indicators["macd"] < indicators["macd_signal"] and
+        indicators["rsi"] > 60 and
+        indicators["wr"] > -20 and
+        indicators["volume"] > indicators["volume_prev"] and
+        indicators["price"] < indicators["ema"] and
+        indicators["adx"] > 20 and
+        fibo_touch
     )
 
     if long_conditions:
@@ -138,12 +136,12 @@ def get_signal(symbol):
         sl = price - 1 * indicators["atr"]
         return f"🟢 ЛОНГ {symbol.replace('-USDT','')}\nВход: {price:.4f}\nTP: {tp:.4f}, SL: {sl:.4f}"
 
-    if short_conditions:
+    elif short_conditions:
         tp = price - 1.5 * indicators["atr"]
         sl = price + 1 * indicators["atr"]
         return f"🔴 ШОРТ {symbol.replace('-USDT','')}\nВход: {price:.4f}\nTP: {tp:.4f}, SL: {sl:.4f}"
 
-    return None  # Нет сигнала, не спамим
+    return None
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -157,17 +155,16 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"Ошибка отправки сообщения в Telegram: {e}")
 
-def check_signals():
+def analyze_and_send_signals():
     global last_sent_signals
     for symbol in symbols:
         signal = get_signal(symbol)
-        # Фильтр от спама — отправляем сообщение только если сигнал новый или изменился
         if signal and last_sent_signals.get(symbol) != signal:
             send_telegram_message(signal)
             last_sent_signals[symbol] = signal
 
 def send_status_update():
-    status = "Бот работает. Текущие цены:\n"
+    status = "Бот работает, мой господин. Текущие цены:\n"
     for symbol in symbols:
         klines = get_kline(symbol)
         if klines:
@@ -175,25 +172,14 @@ def send_status_update():
             status += f"{symbol.replace('-USDT','')}: {last_price}\n"
     send_telegram_message(status)
 
-def job_signals():
-    check_signals()
+# Запускаем задачи по расписанию
+scheduler.add_job(analyze_and_send_signals, 'interval', minutes=5)
+scheduler.add_job(send_status_update, 'interval', minutes=30)
+scheduler.start()
 
-def job_status():
-    send_status_update()
-
-def start_bot():
-    # Запускаем расписание
-    schedule.every(5).minutes.do(job_signals)
-    schedule.every(30).minutes.do(job_status)
-
-    # Первый запуск сразу, чтобы не ждать
-    job_signals()
-    job_status()
-
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+@app.route("/")
+def home():
+    return "Bot is running!", 200
 
 if __name__ == "__main__":
-    threading.Thread(target=start_bot).start()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
