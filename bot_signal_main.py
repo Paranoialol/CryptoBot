@@ -182,4 +182,5 @@ def home():
     return "Bot is running!", 200
 
 if __name__ == "__main__":
+    send_status_update()  # Отправить сообщение при старте
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
