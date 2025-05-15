@@ -1,4 +1,4 @@
-import os
+import os 
 import time
 import hmac
 import hashlib
@@ -138,7 +138,7 @@ def generate_signal_message(symbol, ind):
     msg += f"RSI: {rsi:.2f} — "
     msg += "*перепроданность*\n" if rsi < 30 else ("*перекупленность*\n" if rsi > 70 else "в норме\n")
     msg += f"WR: {wr:.2f} — "
-    msg += "*перепродан*\n" if wr < -80 else ("*перекуплен*\n" if wr > -20 else "в нейтральной зоне\n")
+    msg += "*перепродан*\n" if wr < -80 else ("*перекуп*\n" if wr > -20 else "в нейтральной зоне\n")
     msg += f"Объём: {vol} (до этого был {vol_prev}) — *объёмы {volume_trend}*\n"
 
     if ind["pattern"]:
