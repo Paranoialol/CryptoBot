@@ -41,7 +41,7 @@ def get_kline(symbol, interval="1m", limit=200):
     try:
         signed = sign_request(params.copy())
         url = f"{base_url}{path}?{urlencode(signed)}"
-        res = requests.get(url, headers=headers)
+        res = requests.get(url, headers=headers, timeout=10)
         res.raise_for_status()
         response_data = res.json()
         if 'data' in response_data and response_data['data']:
@@ -52,20 +52,23 @@ def get_kline(symbol, interval="1m", limit=200):
 
 
 def detect_reversal_patterns(df):
-    # Упрощённые разворотные паттерны на основе свечей (альтернатива candlestick)
+    # Упрощённые разворотные паттерны (бычье/медвежье поглощение)
     last_candle = df.iloc[-1]
     prev_candle = df.iloc[-2]
 
-    # Поглощение
-    bullish_engulfing = last_candle['close'] > last_candle['open'] and \
-                        prev_candle['close'] < prev_candle['open'] and \
-                        last_candle['open'] < prev_candle['close'] and \
-                        last_candle['close'] > prev_candle['open']
+    bullish_engulfing = (
+        last_candle['close'] > last_candle['open'] and
+        prev_candle['close'] < prev_candle['open'] and
+        last_candle['open'] < prev_candle['close'] and
+        last_candle['close'] > prev_candle['open']
+    )
 
-    bearish_engulfing = last_candle['close'] < last_candle['open'] and \
-                         prev_candle['close'] > prev_candle['open'] and \
-                         last_candle['open'] > prev_candle['close'] and \
-                         last_candle['close'] < prev_candle['open']
+    bearish_engulfing = (
+        last_candle['close'] < last_candle['open'] and
+        prev_candle['close'] > prev_candle['open'] and
+        last_candle['open'] > prev_candle['close'] and
+        last_candle['close'] < prev_candle['open']
+    )
 
     if bullish_engulfing:
         return "🔼 Бычье поглощение"
@@ -174,7 +177,7 @@ def send_telegram_message(message):
         "parse_mode": "Markdown"
     }
     try:
-        requests.post(url, data=payload)
+        requests.post(url, data=payload, timeout=10)
     except Exception as e:
         print(f"Ошибка отправки сообщения в Telegram: {e}")
 
@@ -193,8 +196,11 @@ def send_status_update():
     for symbol in symbols:
         klines = get_kline(symbol)
         if klines:
-            last_price = klines[-1]["close"]
-            status += f"{symbol.replace('-USDT','')}: {last_price}\n"
+            try:
+                last_price = float(klines[-1]["close"])
+                status += f"{symbol.replace('-USDT','')}: {last_price}\n"
+            except Exception:
+                pass
     send_telegram_message(status)
 
 
