@@ -143,22 +143,47 @@ def check_btc_levels():
 
 
 def analyze():
+    intervals = {
+        "1m": "ТФ 1m",
+        "5m": "ТФ 5m",
+        "15m": "ТФ 15m",
+        "1h": "ТФ 1h"
+    }
+
     for symbol in symbols:
-        klines = get_kline(symbol)
-        if not klines:
-            continue
-        indicators = calculate_indicators(klines)
-        if indicators:
-            text = (
-                f"<b>{symbol}</b>\n"
-                f"Цена: {klines[-1]['close']}\n"
-                f"MACD: {indicators['macd']:.2f}\n"
-                f"Signal: {indicators['signal']:.2f}\n"
-                f"RSI: {indicators['rsi']:.2f}\n"
-                f"WR: {indicators['wr']:.2f}\n"
-                f"<b>{indicators['pattern']}</b>"
+        message = f"📊 Сигналы по монете <b>{symbol}</b> ({datetime.utcnow().strftime('%H:%M:%S UTC')}):\n\n"
+        has_data = False
+
+        for interval, label in intervals.items():
+            klines = get_kline(symbol, interval=interval, limit=100)
+            if not klines:
+                continue
+
+            indicators = calculate_indicators(klines)
+            if not indicators:
+                continue
+
+            price = float(klines[-1]["close"])
+            volume_now = float(klines[-1]["volume"])
+            volume_prev = float(klines[-2]["volume"])
+            volume_trend = "🔺 растут" if volume_now > volume_prev else "🔻 падают"
+
+            trend = "восходящий" if price > float(pd.DataFrame(klines)["close"].rolling(window=21).mean().iloc[-1]) else "нисходящий"
+
+            message += (
+                f"{label}:\n"
+                f"Цена: {price:.4f} USDT | EMA(21): {pd.DataFrame(klines)['close'].rolling(window=21).mean().iloc[-1]:.4f} — тренд {trend}\n"
+                f"MACD: {indicators['macd']:.4f} vs сигнальная {indicators['signal']:.4f} — {'бычий' if indicators['macd'] > indicators['signal'] else 'медвежий'}\n"
+                f"RSI: {indicators['rsi']:.2f} ({'норма' if 30 < indicators['rsi'] < 70 else '⚠️'})\n"
+                f"WR: {indicators['wr']:.2f} ({'🔻 перепродан' if indicators['wr'] < -80 else '🔺 перекуплен' if indicators['wr'] > -20 else 'норма'})\n"
+                f"Объём: {volume_now:.1f} (до этого: {volume_prev:.1f}) — {volume_trend}\n\n"
             )
-            send_telegram_message(text)
+            has_data = True
+
+        if has_data:
+            message += "⚪ Пока чётких сигналов нет. Я слежу дальше."
+            send_telegram_message(message)
+
 
 
 def run_bot():
