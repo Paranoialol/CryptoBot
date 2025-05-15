@@ -104,66 +104,6 @@ def get_signal(symbol):
     volume_prev = indicators["volume_prev"]
     atr = indicators["atr"]
 
-    # Определяем тренд по EMA и его направлению
-    if price > ema:
-        trend = "восходящий"
-    else:
-        trend = "нисходящий"
-
-    # Дополнительно смотрим, растёт EMA или падает
-    ema_trend = "растёт" if ema > ema_prev else "снижается"
-
-    # Объёмы: растут или падают
-    volume_trend = "растут" if volume > volume_prev else "снижаются"
-
-    # MACD сигнал
-    if macd > macd_signal:
-        macd_trend = "бычий импульс"
-    elif macd < macd_signal:
-        macd_trend = "медвежий импульс"
-    else:
-        macd_trend = "нейтральный импульс"
-
-    # RSI — зоны
-    if rsi > 70:
-        rsi_zone = "перекупленность"
-    elif rsi < 30:
-        rsi_zone = "перепроданность"
-    else:
-        rsi_zone = "нейтральная зона"
-
-    # WR — зоны
-    if wr > -20:
-        wr_zone = "перекупленность"
-    elif wr < -80:
-        wr_zone = "перепроданность"
-    else:
-        wr_zone = "нейтральная зона"
-
-    # Фибо зона
-    if price > indicators["fibo_5"]:
-        fibo_zone = "Цена выше уровня 0.5 по Фибоначчи — возможен потенциал роста."
-    else:
-def get_signal(symbol):
-    klines = get_kline(symbol)
-    if not klines or len(klines) < 50:
-        return None
-
-    indicators = calculate_indicators(klines)
-    if not indicators:
-        return None
-
-    price = indicators["price"]
-    ema = indicators["ema"]
-    ema_prev = indicators["ema_prev"]
-    macd = indicators["macd"]
-    macd_signal = indicators["macd_signal"]
-    rsi = indicators["rsi"]
-    wr = indicators["wr"]
-    volume = indicators["volume"]
-    volume_prev = indicators["volume_prev"]
-    atr = indicators["atr"]
-
     # Тренд по EMA
     trend = "восходящий" if price > ema else "нисходящий"
 
@@ -195,10 +135,9 @@ def get_signal(symbol):
         wr_zone = "нейтральная зона"
 
     # Фибо зона
-    fibo_zone = ""
     if price > indicators["fibo_5"]:
         fibo_zone = "Цена выше 0.5 по Фибо — потенциал роста."
-    elif price < indicators["fibo_5"]:
+    else:
         fibo_zone = "Цена ниже 0.5 по Фибо — давление продавцов."
 
     msg = f"Монета *{symbol.replace('-USDT','')}*\n"
