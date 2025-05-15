@@ -1,4 +1,4 @@
-import os 
+import os
 import time
 import hmac
 import hashlib
@@ -22,13 +22,11 @@ headers = {"X-BX-APIKEY": API_KEY}
 app = Flask(__name__)
 bot_started = False
 
-
 def sign_request(params):
     query = '&'.join(f"{k}={v}" for k, v in sorted(params.items()))
     signature = hmac.new(API_SECRET.encode(), query.encode(), hashlib.sha256).hexdigest()
     params["signature"] = signature
     return params
-
 
 def get_kline(symbol, interval="1m", limit=200):
     path = '/openApi/swap/v3/quote/klines'
@@ -50,9 +48,7 @@ def get_kline(symbol, interval="1m", limit=200):
         send_telegram_message(f"Ошибка при получении свечей {symbol}: {e}")
     return []
 
-
 def detect_reversal_patterns(df):
-    # Упрощённые разворотные паттерны (бычье/медвежье поглощение)
     last_candle = df.iloc[-1]
     prev_candle = df.iloc[-2]
 
@@ -75,7 +71,6 @@ def detect_reversal_patterns(df):
     elif bearish_engulfing:
         return "🔽 Медвежье поглощение"
     return ""
-
 
 def calculate_indicators(klines):
     df = pd.DataFrame(klines)
@@ -116,58 +111,63 @@ def calculate_indicators(klines):
         send_telegram_message(f"Ошибка в расчёте индикаторов: {e}")
         return None
 
+def generate_signal_message(symbol, indicators_by_tf):
+    msg = f"📊 Сигналы по монете *{symbol.replace('-USDT','')}* ({datetime.utcnow().strftime('%H:%M:%S')} UTC):\n"
+    signals_present = False
+    
+    for tf, ind in indicators_by_tf.items():
+        price = ind["price"]
+        ema = ind["ema"]
+        macd_val = ind["macd"]["MACD_12_26_9"]
+        macd_signal = ind["macd"]["MACDs_12_26_9"]
+        rsi = ind["rsi"]
+        wr = ind["wr"]
+        atr = ind["atr"]
+        vol, vol_prev = ind["volume"], ind["volume_prev"]
 
-def generate_signal_message(symbol, ind):
-    price = ind["price"]
-    ema = ind["ema"]
-    macd_val = ind["macd"]["MACD_12_26_9"]
-    macd_signal = ind["macd"]["MACDs_12_26_9"]
-    rsi = ind["rsi"]
-    wr = ind["wr"]
-    atr = ind["atr"]
-    vol, vol_prev = ind["volume"], ind["volume_prev"]
+        trend = "восходящий" if price > ema else "нисходящий"
+        volume_trend = "растут" if vol > vol_prev else "падают"
+        macd_dir = "бычий" if macd_val > macd_signal else "медвежий"
 
-    trend = "восходящий" if price > ema else "нисходящий"
-    volume_trend = "растут" if vol > vol_prev else "падают"
-    macd_dir = "бычий" if macd_val > macd_signal else "медвежий"
+        msg += f"\nТФ {tf}:\nЦена: {price:.4f} USDT | EMA(21): {ema:.4f} — тренд *{trend}*\n"
+        msg += f"MACD: {macd_val:.4f} vs сигнальная {macd_signal:.4f} — *{macd_dir}*\n"
+        msg += f"RSI: {rsi:.2f} ({'🔻 перепродан' if rsi < 30 else '🔺 перекуплен' if rsi > 70 else 'норма'})\n"
+        msg += f"WR: {wr:.2f} ({'🔻 перепродан' if wr < -80 else '🔺 перекуплен' if wr > -20 else 'норма'})\n"
+        msg += f"Объём: {vol} (до этого: {vol_prev}) — *{volume_trend}*\n"
 
-    msg = f"🧾 Анализ монеты *{symbol.replace('-USDT','')}* ({datetime.utcnow().strftime('%H:%M:%S')} UTC)\n"
-    msg += f"Цена: {price:.4f} USDT\n"
-    msg += f"EMA(21): {ema:.4f} — тренд *{trend}*\n"
-    msg += f"MACD: {macd_val:.4f} vs сигнальная {macd_signal:.4f} — *{macd_dir} сигнал*\n"
-    msg += f"RSI: {rsi:.2f} — "
-    msg += "*перепроданность*\n" if rsi < 30 else ("*перекупленность*\n" if rsi > 70 else "в норме\n")
-    msg += f"WR: {wr:.2f} — "
-    msg += "*перепродан*\n" if wr < -80 else ("*перекуп*\n" if wr > -20 else "в нейтральной зоне\n")
-    msg += f"Объём: {vol} (до этого был {vol_prev}) — *объёмы {volume_trend}*\n"
+        if ind["pattern"]:
+            msg += f"Свечной паттерн: {ind['pattern']}\n"
 
-    if ind["pattern"]:
-        msg += f"Свечной паттерн: {ind['pattern']}\n"
+        long_ok = macd_val > macd_signal and rsi < 50 and wr < -80 and vol > vol_prev and price > ema
+        short_ok = macd_val < macd_signal and rsi > 60 and wr > -20 and vol > vol_prev and price < ema
 
-    long_ok = macd_val > macd_signal and rsi < 50 and wr < -80 and vol > vol_prev and price > ema
-    short_ok = macd_val < macd_signal and rsi > 60 and wr > -20 and vol > vol_prev and price < ema
+        if long_ok:
+            tp, sl = price + 1.5 * atr, price - 1.0 * atr
+            msg += f"📈 *ЛОНГ*: вход {price:.4f}, TP: {tp:.4f}, SL: {sl:.4f}\n"
+            signals_present = True
+        elif short_ok:
+            tp, sl = price - 1.5 * atr, price + 1.0 * atr
+            msg += f"📉 *ШОРТ*: вход {price:.4f}, TP: {tp:.4f}, SL: {sl:.4f}\n"
+            signals_present = True
 
-    if long_ok:
-        tp, sl = price + 1.5 * atr, price - 1.0 * atr
-        msg += f"\n📈 *ЛОНГ сигнал!*\nВход от: {price:.4f}\nTP: {tp:.4f} | SL: {sl:.4f}"
-    elif short_ok:
-        tp, sl = price - 1.5 * atr, price + 1.0 * atr
-        msg += f"\n📉 *ШОРТ сигнал!*\nВход от: {price:.4f}\nTP: {tp:.4f} | SL: {sl:.4f}"
-    else:
-        msg += f"\n⚪ Пока чётких сигналов нет. Я слежу дальше за ситуацией."
+    if not signals_present:
+        msg += f"\n⚪ Пока чётких сигналов нет. Я слежу дальше."
 
     return msg
 
-
 def get_signal(symbol):
-    klines = get_kline(symbol)
-    if not klines or len(klines) < 50:
-        return None
-    ind = calculate_indicators(klines)
-    if not ind:
-        return None
-    return generate_signal_message(symbol, ind)
+    indicators_by_tf = {}
+    for tf in ["1m", "5m", "15m", "1h"]:
+        klines = get_kline(symbol, interval=tf)
+        if not klines or len(klines) < 50:
+            continue
+        ind = calculate_indicators(klines)
+        if ind:
+            indicators_by_tf[tf] = ind
 
+    if not indicators_by_tf:
+        return None
+    return generate_signal_message(symbol, indicators_by_tf)
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -181,7 +181,6 @@ def send_telegram_message(message):
     except Exception as e:
         print(f"Ошибка отправки сообщения в Telegram: {e}")
 
-
 def check_signals():
     signals = []
     for symbol in symbols:
@@ -190,9 +189,8 @@ def check_signals():
             signals.append(msg)
     return signals
 
-
 def send_status_update():
-    status = "Бот работает. Текущие цены:\n"
+    status = "📡 Обновление цен (без сигналов):\n"
     for symbol in symbols:
         klines = get_kline(symbol)
         if klines:
@@ -202,7 +200,6 @@ def send_status_update():
             except Exception:
                 pass
     send_telegram_message(status)
-
 
 def start_bot():
     global bot_started
@@ -214,7 +211,7 @@ def start_bot():
             for msg in signals:
                 send_telegram_message(msg)
         else:
-            send_telegram_message("⚪ Нет сигналов на вход при старте бота.")
+            send_telegram_message("⚪ Нет сигналов при старте бота.")
 
         def signals_loop():
             while True:
@@ -232,11 +229,9 @@ def start_bot():
         threading.Thread(target=signals_loop, daemon=True).start()
         threading.Thread(target=status_loop, daemon=True).start()
 
-
 @app.route("/")
 def home():
     return "Bot is running!", 200
-
 
 if __name__ == "__main__":
     threading.Thread(target=start_bot, daemon=True).start()
