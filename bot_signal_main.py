@@ -49,21 +49,35 @@ def get_kline(symbol, interval="1m", limit=200):
         print(f"Exception fetching kline for {symbol} ({interval}): {e}")
     return []
 
+def calculate_bollinger_bands(df, length=20, std_dev=2):
+    bb_middle = ta.sma(df["close"], length)
+    bb_std = ta.stdev(df["close"], length)
+    upper = bb_middle + std_dev * bb_std
+    lower = bb_middle - std_dev * bb_std
+    return upper, lower
+
 def calculate_indicators(df):
     if df.empty or len(df) < 35:
         return None
 
     df["close"] = pd.to_numeric(df["close"], errors="coerce")
+    df["open"] = pd.to_numeric(df["open"], errors="coerce")
     df["high"] = pd.to_numeric(df["high"], errors="coerce")
     df["low"] = pd.to_numeric(df["low"], errors="coerce")
     df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
 
+    # Основные индикаторы
     macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
     df = pd.concat([df, macd], axis=1)
     df["RSI_14"] = ta.rsi(df["close"], length=14)
     df["WR_14"] = ta.willr(df["high"], df["low"], df["close"], length=14)
     df["ATR_14"] = ta.atr(df["high"], df["low"], df["close"], length=14)
     df["EMA_21"] = ta.ema(df["close"], length=21)
+
+    # Добавляем Bollinger Bands
+    upper_bb, lower_bb = calculate_bollinger_bands(df, length=20, std_dev=2)
+    df["BB_upper"] = upper_bb
+    df["BB_lower"] = lower_bb
 
     latest = df.iloc[-1]
 
@@ -76,16 +90,26 @@ def calculate_indicators(df):
     price = latest["close"]
     volume_now = latest["volume"]
     volume_prev = df["volume"].iloc[-2]
+    upper_band = latest["BB_upper"]
+    lower_band = latest["BB_lower"]
 
+    # Определение тренда
     trend = "восходящий" if price > ema21 else "нисходящий"
     volume_trend = "растут" if volume_now > volume_prev else "падают"
+
+    # Анализ свечных паттернов
     candle_pattern = detect_candle_pattern(df)
 
+    # Улучшенная логика сигнала с учетом Bollinger Bands
     signal = "Ожидание"
     if wr < -80 and macd_val > signal_val and 40 < rsi < 60 and trend == "восходящий" and volume_trend == "растут":
-        signal = "Лонг"
+        # Также учитываем, если цена пробила верхнюю полосу Bollinger, возможен рост
+        if price > upper_band:
+            signal = "Лонг"
     elif wr > -20 and macd_val < signal_val and rsi > 50 and trend == "нисходящий" and volume_trend == "падают":
-        signal = "Шорт"
+        # И наоборот — пробитие нижней полосы может указывать на шорт
+        if price < lower_band:
+            signal = "Шорт"
 
     return {
         "price": price,
@@ -100,7 +124,9 @@ def calculate_indicators(df):
         "volume_prev": volume_prev,
         "volume_trend": volume_trend,
         "candle_pattern": candle_pattern,
-        "signal": signal
+        "signal": signal,
+        "bb_upper": upper_band,
+        "bb_lower": lower_band
     }
 
 def detect_candle_pattern(df):
@@ -113,17 +139,21 @@ def detect_candle_pattern(df):
     body_last = abs(last["close"] - last["open"])
     body_prev = abs(prev["close"] - prev["open"])
 
+    # Бычье поглощение
     if (last["close"] > last["open"] and prev["close"] < prev["open"] and
         last["close"] > prev["open"] and last["open"] < prev["close"]):
         return "Паттерн: бычье поглощение"
 
+    # Медвежье поглощение
     if (last["close"] < last["open"] and prev["close"] > prev["open"] and
         last["open"] > prev["close"] and last["close"] < prev["open"]):
         return "Паттерн: медвежье поглощение"
 
+    # Молот
     if body_last < (last["high"] - last["low"]) * 0.3 and (last["close"] - last["low"]) < body_last * 0.2:
         return "Паттерн: молот"
 
+    # Доджи
     if body_last < (last["high"] - last["low"]) * 0.1:
         return "Паттерн: доджи"
 
