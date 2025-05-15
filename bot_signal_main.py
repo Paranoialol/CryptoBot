@@ -12,8 +12,8 @@ from flask import Flask
 
 API_KEY = os.getenv("BINGX_API_KEY")
 API_SECRET = os.getenv("BINGX_API_SECRET")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")  # Лучше тоже хранить в переменных окружения
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # Аналогично
 
 symbols = ["BTC-USDT", "TIA-USDT", "PEOPLE-USDT", "POPCAT-USDT", "DOGE-USDT"]
 base_url = "https://open-api.bingx.com"
@@ -85,10 +85,6 @@ def calculate_indicators(klines):
         send_telegram_message(f"Ошибка в расчете индикаторов: {e}")
         return None
 
-def is_touching_fibo(price, level, tol=0.005):
-    # Проверка, находится ли цена в пределах 0.5% от уровня Фибоначчи
-    return abs(price - level) / level <= tol
-
 def get_signal(symbol):
     klines = get_kline(symbol)
     if not klines or len(klines) < 50:
@@ -98,17 +94,16 @@ def get_signal(symbol):
     if not indicators:
         return f"⚠️ {symbol.replace('-USDT','')}: Ошибка индикаторов"
 
-    price = indicators['price']
-    fibo_levels = [indicators['fibo_382'], indicators['fibo_5'], indicators['fibo_618']]
-    fibo_touch = any(is_touching_fibo(price, level) for level in fibo_levels)
+    debug = f"[DEBUG] {symbol}\nЦена: {indicators['price']}\nEMA: {indicators['ema']:.4f} (пред: {indicators['ema_prev']:.4f})\nMACD: {indicators['macd']:.4f}, сигн: {indicators['macd_signal']:.4f}\nRSI: {indicators['rsi']:.2f}\nWR: {indicators['wr']:.2f}\nОбъем: {indicators['volume']} (пред: {indicators['volume_prev']})\nATR: {indicators['atr']:.4f}\nFIBO: 0.382={indicators['fibo_382']:.4f}, 0.5={indicators['fibo_5']:.4f}, 0.618={indicators['fibo_618']:.4f}"
+
+    send_telegram_message(debug)
 
     long_conditions = (
         indicators["macd"] > indicators["macd_signal"]
         and indicators["rsi"] < 50
         and indicators["wr"] < -80
         and indicators["volume"] > indicators["volume_prev"]
-        and price > indicators["ema"]
-        and fibo_touch
+        and indicators["price"] > indicators["ema"]
     )
 
     short_conditions = (
@@ -116,24 +111,18 @@ def get_signal(symbol):
         and indicators["rsi"] > 60
         and indicators["wr"] > -20
         and indicators["volume"] > indicators["volume_prev"]
-        and price < indicators["ema"]
-        and fibo_touch
+        and indicators["price"] < indicators["ema"]
     )
 
-    tp_long = price + 1.5 * indicators["atr"]
-    sl_long = price - 1 * indicators["atr"]
-    tp_short = price - 1.5 * indicators["atr"]
-    sl_short = price + 1 * indicators["atr"]
-
     if long_conditions:
-        return (f"🔵 ЛОНГ {symbol.replace('-USDT','')}\n"
-                f"Вход: {price:.4f}\nTP: {tp_long:.4f}, SL: {sl_long:.4f}\n"
-                f"Фибо уровень касания")
+        tp = indicators["price"] + 1.5 * indicators["atr"]
+        sl = indicators["price"] - 1 * indicators["atr"]
+        return f"🔵 ЛОНГ {symbol.replace('-USDT','')}\nВход: {indicators['price']:.4f}\nTP: {tp:.4f}, SL: {sl:.4f}"
 
     elif short_conditions:
-        return (f"🔴 ШОРТ {symbol.replace('-USDT','')}\n"
-                f"Вход: {price:.4f}\nTP: {tp_short:.4f}, SL: {sl_short:.4f}\n"
-                f"Фибо уровень касания")
+        tp = indicators["price"] - 1.5 * indicators["atr"]
+        sl = indicators["price"] + 1 * indicators["atr"]
+        return f"🔴 ШОРТ {symbol.replace('-USDT','')}\nВход: {indicators['price']:.4f}\nTP: {tp:.4f}, SL: {sl:.4f}"
 
     return f"⚪ {symbol.replace('-USDT','')}: Пока нет сигнала"
 
@@ -155,7 +144,7 @@ def check_signals():
         send_telegram_message(signal)
 
 def send_status_update():
-    status = "Бот работает, мой господин. Текущие цены:\n"
+    status = "Бот работает, мой господин. Я все еще ищу точки входа для тебя, лучший из трейдеров. Текущие цены:\n"
     for symbol in symbols:
         klines = get_kline(symbol)
         if klines:
@@ -170,7 +159,7 @@ def start_bot():
         check_signals()
         send_status_update()
         while True:
-            time.sleep(30 * 60)  # каждые 30 минут
+            time.sleep(5 * 60)  # каждые 30 минут
             check_signals()
             send_status_update()
 
