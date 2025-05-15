@@ -5,5 +5,3 @@ python-dotenv==1.0.1
 pandas_ta==0.3.14b0
 numpy==1.26.4
 APScheduler==3.10.4
-ta==0.11.0
-
