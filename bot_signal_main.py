@@ -4,7 +4,6 @@ import hmac
 import hashlib
 import threading
 import requests
-import json
 import pandas as pd
 import pandas_ta as ta
 from urllib.parse import urlencode
@@ -12,8 +11,8 @@ from flask import Flask
 
 API_KEY = os.getenv("BINGX_API_KEY")
 API_SECRET = os.getenv("BINGX_API_SECRET")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")  # Лучше тоже хранить в переменных окружения
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # Аналогично
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 symbols = ["BTC-USDT", "TIA-USDT", "PEOPLE-USDT", "POPCAT-USDT", "DOGE-USDT"]
 base_url = "https://open-api.bingx.com"
@@ -88,43 +87,69 @@ def calculate_indicators(klines):
 def get_signal(symbol):
     klines = get_kline(symbol)
     if not klines or len(klines) < 50:
-        return f"⚠️ {symbol.replace('-USDT','')}: Недостаточно данных"
+        return None
 
     indicators = calculate_indicators(klines)
     if not indicators:
-        return f"⚠️ {symbol.replace('-USDT','')}: Ошибка индикаторов"
+        return None
 
-    debug = f"[DEBUG] {symbol}\nЦена: {indicators['price']}\nEMA: {indicators['ema']:.4f} (пред: {indicators['ema_prev']:.4f})\nMACD: {indicators['macd']:.4f}, сигн: {indicators['macd_signal']:.4f}\nRSI: {indicators['rsi']:.2f}\nWR: {indicators['wr']:.2f}\nОбъем: {indicators['volume']} (пред: {indicators['volume_prev']})\nATR: {indicators['atr']:.4f}\nFIBO: 0.382={indicators['fibo_382']:.4f}, 0.5={indicators['fibo_5']:.4f}, 0.618={indicators['fibo_618']:.4f}"
+    price = indicators["price"]
+    ema = indicators["ema"]
+    macd = indicators["macd"]
+    macd_signal = indicators["macd_signal"]
+    rsi = indicators["rsi"]
+    wr = indicators["wr"]
+    volume = indicators["volume"]
+    volume_prev = indicators["volume_prev"]
+    atr = indicators["atr"]
 
-    send_telegram_message(debug)
+    trend = "восходящий" if price > ema else "нисходящий"
+    volume_trend = "растут" if volume > volume_prev else "снижаются"
+    fibo_zone = ""
+    if price > indicators["fibo_5"]:
+        fibo_zone = "Цена выше 0.5 по Фибо — потенциал роста."
+    elif price < indicators["fibo_5"]:
+        fibo_zone = "Цена ниже 0.5 по Фибо — давление продавцов."
+
+    msg = f"Монета *{symbol.replace('-USDT','')}*\n"
+    msg += f"Цена: {price:.4f} USDT\n"
+    msg += f"Тренд: {trend}, Объёмы {volume_trend}\n"
+    msg += f"MACD: {macd:.4f}, сигнал: {macd_signal:.4f}\n"
+    msg += f"RSI: {rsi:.2f}, WR: {wr:.2f}\n"
+    msg += f"{fibo_zone}\n"
 
     long_conditions = (
-        indicators["macd"] > indicators["macd_signal"]
-        and indicators["rsi"] < 50
-        and indicators["wr"] < -80
-        and indicators["volume"] > indicators["volume_prev"]
-        and indicators["price"] > indicators["ema"]
+        macd > macd_signal
+        and rsi < 50
+        and wr < -80
+        and volume > volume_prev
+        and price > ema
     )
 
     short_conditions = (
-        indicators["macd"] < indicators["macd_signal"]
-        and indicators["rsi"] > 60
-        and indicators["wr"] > -20
-        and indicators["volume"] > indicators["volume_prev"]
-        and indicators["price"] < indicators["ema"]
+        macd < macd_signal
+        and rsi > 60
+        and wr > -20
+        and volume > volume_prev
+        and price < ema
     )
 
     if long_conditions:
-        tp = indicators["price"] + 1.5 * indicators["atr"]
-        sl = indicators["price"] - 1 * indicators["atr"]
-        return f"🔵 ЛОНГ {symbol.replace('-USDT','')}\nВход: {indicators['price']:.4f}\nTP: {tp:.4f}, SL: {sl:.4f}"
+        tp = price + 1.5 * atr
+        sl = price - 1 * atr
+        msg += "\n*Сигнал на вход в ЛОНГ:*\n"
+        msg += f"Вход от {price:.4f}, TP: {tp:.4f}, SL: {sl:.4f}"
+        return msg
 
     elif short_conditions:
-        tp = indicators["price"] - 1.5 * indicators["atr"]
-        sl = indicators["price"] + 1 * indicators["atr"]
-        return f"🔴 ШОРТ {symbol.replace('-USDT','')}\nВход: {indicators['price']:.4f}\nTP: {tp:.4f}, SL: {sl:.4f}"
+        tp = price - 1.5 * atr
+        sl = price + 1 * atr
+        msg += "\n*Сигнал на вход в ШОРТ:*\n"
+        msg += f"Вход от {price:.4f}, TP: {tp:.4f}, SL: {sl:.4f}"
+        return msg
 
-    return f"⚪ {symbol.replace('-USDT','')}: Пока нет сигнала"
+    msg += "\nСигналов на вход пока нет."
+    return msg
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -139,12 +164,15 @@ def send_telegram_message(message):
         print(f"Ошибка отправки сообщения в Telegram: {e}")
 
 def check_signals():
+    signals = []
     for symbol in symbols:
         signal = get_signal(symbol)
-        send_telegram_message(signal)
+        if signal:
+            signals.append(signal)
+    return signals
 
 def send_status_update():
-    status = "Бот работает, мой господин. Я все еще ищу точки входа для тебя, лучший из трейдеров. Текущие цены:\n"
+    status = "Бот работает. Текущие цены:\n"
     for symbol in symbols:
         klines = get_kline(symbol)
         if klines:
@@ -156,17 +184,36 @@ def start_bot():
     global bot_started
     if not bot_started:
         bot_started = True
-        check_signals()
-        send_status_update()
-        while True:
-            time.sleep(5 * 60)  # каждые 30 минут
-            check_signals()
-            send_status_update()
+
+        # При старте сразу анализируем сигналы
+        signals = check_signals()
+        if signals:
+            for msg in signals:
+                send_telegram_message(msg)
+        else:
+            send_telegram_message("⚪ Нет сигналов на вход в лонг или шорт при старте бота.")
+
+        # Запускаем циклы для обновления сигналов и статуса
+        def signals_loop():
+            while True:
+                time.sleep(5 * 60)  # каждые 5 минут
+                signals = check_signals()
+                if signals:
+                    for msg in signals:
+                        send_telegram_message(msg)
+
+        def status_loop():
+            while True:
+                time.sleep(30 * 60)  # каждые 30 минут
+                send_status_update()
+
+        threading.Thread(target=signals_loop, daemon=True).start()
+        threading.Thread(target=status_loop, daemon=True).start()
 
 @app.route("/")
 def home():
     return "Bot is running!", 200
 
 if __name__ == "__main__":
-    threading.Thread(target=start_bot).start()
+    threading.Thread(target=start_bot, daemon=True).start()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
