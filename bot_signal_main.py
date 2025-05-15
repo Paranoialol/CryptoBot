@@ -49,18 +49,21 @@ def get_kline(symbol, interval="1m", limit=200):
 
 def calculate_indicators(klines):
     df = pd.DataFrame(klines)
+    # Преобразуем колонки в float для расчетов
     df[["open", "high", "low", "close", "volume"]] = df[["open", "high", "low", "close", "volume"]].astype(float)
 
     if len(df) < 50:
         return None
 
     try:
+        # Расчет индикаторов с помощью pandas_ta
         macd = ta.macd(df["close"], fast=12, slow=26, signal=9).dropna()
         rsi = ta.rsi(df["close"], length=14).dropna()
         ema = ta.ema(df["close"], length=21).dropna()
         wr = ta.willr(df["high"], df["low"], df["close"], length=14).dropna()
         atr = ta.atr(df["high"], df["low"], df["close"], length=14).dropna()
 
+        # Расчет уровней Фибоначчи для дополнительного анализа (по закрытию последней свечи)
         fibo_618 = df["close"].iloc[-1] * 0.618
         fibo_5 = df["close"].iloc[-1] * 0.5
         fibo_382 = df["close"].iloc[-1] * 0.382
@@ -104,13 +107,13 @@ def get_signal(symbol):
     volume_prev = indicators["volume_prev"]
     atr = indicators["atr"]
 
-    # Тренд по EMA
+    # Тренд по EMA (21)
     trend = "восходящий" if price > ema else "нисходящий"
 
-    # Объемы
+    # Объемы: растут или падают по сравнению с предыдущим баром
     volume_trend = "растут" if volume > volume_prev else "снижаются"
 
-    # MACD тренд
+    # MACD сигнал
     if macd > macd_signal:
         macd_trend = "бычий сигнал"
     elif macd < macd_signal:
@@ -134,7 +137,7 @@ def get_signal(symbol):
     else:
         wr_zone = "нейтральная зона"
 
-    # Фибо зона
+    # Зоны Фибоначчи (пример интерпретации)
     if price > indicators["fibo_5"]:
         fibo_zone = "Цена выше 0.5 по Фибо — потенциал роста."
     else:
@@ -148,7 +151,7 @@ def get_signal(symbol):
     msg += f"Williams %R: {wr:.2f} ({wr_zone})\n"
     msg += f"{fibo_zone}\n"
 
-    # Условия для входа в ЛОНГ
+    # Логика входа в лонг (сигналы с учетом MACD, RSI, WR, объёмов и EMA)
     long_conditions = (
         macd > macd_signal
         and rsi < 50
@@ -157,7 +160,7 @@ def get_signal(symbol):
         and price > ema
     )
 
-    # Условия для входа в ШОРТ
+    # Логика входа в шорт
     short_conditions = (
         macd < macd_signal
         and rsi > 60
