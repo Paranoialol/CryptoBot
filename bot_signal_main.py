@@ -3,181 +3,127 @@ import time
 import hmac
 import hashlib
 import requests
-import json
 import pandas as pd
-import pandas_ta as ta
-from urllib.parse import urlencode
+import numpy as np
+from datetime import datetime
 from flask import Flask
 from apscheduler.schedulers.background import BackgroundScheduler
+from dotenv import load_dotenv
+import pandas_ta as ta
+
+load_dotenv()
+
+app = Flask(__name__)
 
 API_KEY = os.getenv("BINGX_API_KEY")
 API_SECRET = os.getenv("BINGX_API_SECRET")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-symbols = ["BTC-USDT", "TIA-USDT", "PEOPLE-USDT", "POPCAT-USDT", "DOGE-USDT"]
-base_url = "https://open-api.bingx.com"
-headers = {"X-BX-APIKEY": API_KEY}
+HEADERS = {
+    "X-BX-APIKEY": API_KEY
+}
 
-app = Flask(__name__)
+SYMBOLS = ["BTC-USDT", "TIA-USDT", "PEOPLE-USDT", "POPCAT-USDT", "DOGE-USDT"]
+INTERVAL = "1m"
 
-def sign_request(params):
-    query = '&'.join(f"{k}={v}" for k, v in sorted(params.items()))
-    signature = hmac.new(API_SECRET.encode(), query.encode(), hashlib.sha256).hexdigest()
-    params["signature"] = signature
-    return params
+FIB_LEVELS = [0.382, 0.5, 0.618]
 
-def get_kline(symbol, interval="1m", limit=100):
-    path = '/openApi/swap/v3/quote/klines'
+def send_telegram_message(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    data = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
+    requests.post(url, data=data)
+
+def sign(params):
+    query_string = "&".join([f"{k}={v}" for k, v in sorted(params.items())])
+    signature = hmac.new(API_SECRET.encode(), query_string.encode(), hashlib.sha256).hexdigest()
+    return signature
+
+def get_klines(symbol, interval, limit=100):
+    url = "https://open-api.bingx.com/openApi/spot/v1/market/kline"
     params = {
         "symbol": symbol,
         "interval": interval,
         "limit": limit,
-        "timestamp": str(int(time.time() * 1000))
     }
+    params["timestamp"] = int(time.time() * 1000)
+    params["signature"] = sign(params)
     try:
-        signed = sign_request(params.copy())
-        url = f"{base_url}{path}?{urlencode(signed)}"
-        res = requests.get(url, headers=headers)
-        res.raise_for_status()
-        response_data = res.json()
-        if 'data' in response_data and response_data['data']:
-            return response_data['data']
-        else:
-            return []
+        response = requests.get(url, headers=HEADERS, params=params)
+        data = response.json()
+        if data['code'] == 0 and 'data' in data:
+            return pd.DataFrame(data['data'])
     except Exception as e:
-        send_telegram_message(f"❗Ошибка получения данных {symbol}: {e}")
-        return []
+        print(f"Error fetching data for {symbol}: {e}")
+    return pd.DataFrame()
 
-def calculate_indicators(klines):
-    df = pd.DataFrame(klines)
-    if df.empty:
-        return None
-    for col in ["close", "open", "high", "low", "volume"]:
-        df[col] = df[col].astype(float)
-    df.dropna(inplace=True)
-    if len(df) < 50:
-        return None
-    try:
-        macd = ta.macd(df["close"], fast=12, slow=26, signal=9).dropna()
-        rsi = ta.rsi(df["close"], length=14).dropna()
-        ema = ta.ema(df["close"], length=21).dropna()
-        wr = ta.wr(df["high"], df["low"], df["close"], length=14).dropna()
-        volume = df["volume"]
-        close = df["close"]
+def analyze():
+    for symbol in SYMBOLS:
+        df = get_klines(symbol, INTERVAL)
+        if df.empty or len(df) < 50:
+            send_telegram_message(f"⚪ {symbol.split('-')[0]}: Недостаточно данных для анализа")
+            continue
 
-        # Последние значения индикаторов
-        return {
-            "macd": macd["MACD_12_26_9"].iloc[-1],
-            "macd_signal": macd["MACDs_12_26_9"].iloc[-1],
-            "rsi": rsi.iloc[-1],
-            "ema": ema.iloc[-1],
-            "ema_previous": ema.iloc[-2] if len(ema) > 1 else ema.iloc[-1],
-            "wr": wr.iloc[-1],
-            "wr_previous": wr.iloc[-2] if len(wr) > 1 else wr.iloc[-1],
-            "volume": volume.iloc[-1],
-            "volume_previous": volume.iloc[-2] if len(volume) > 1 else volume.iloc[-1],
-            "close": close.iloc[-1],
-            "close_previous": close.iloc[-2] if len(close) > 1 else close.iloc[-1],
-            "close_series": close
-        }
-    except Exception as e:
-        send_telegram_message(f"❗Ошибка расчёта индикаторов: {e}")
-        return None
+        df.columns = ["timestamp", "open", "high", "low", "close", "volume"]
+        df[["open", "high", "low", "close", "volume"]] = df[["open", "high", "low", "close", "volume"]].astype(float)
+        df['close'] = df['close']
 
-def calculate_fibonacci_levels(close_series):
-    max_price = close_series.max()
-    min_price = close_series.min()
-    diff = max_price - min_price
-    levels = {
-        "0.382": round(max_price - 0.382 * diff, 5),
-        "0.5": round(max_price - 0.5 * diff, 5),
-        "0.618": round(max_price - 0.618 * diff, 5),
-    }
-    return levels
+        close = df['close']
+        volume = df['volume']
 
-def volume_trending_up(volume, volume_previous):
-    return volume > volume_previous
+        ema = ta.ema(close, length=20).iloc[-1]
+        macd_line, signal_line = ta.macd(close).iloc[-1][['MACD_12_26_9', 'MACDs_12_26_9']]
+        rsi = ta.rsi(close, length=14).iloc[-1]
+        wr = ta.willr(df['high'], df['low'], close).iloc[-1]
+        atr = ta.atr(df['high'], df['low'], close, length=14).iloc[-1]
 
-def price_touching_level(price, level, threshold=0.002):
-    # цена касается уровня если разница менее 0.2%
-    return abs(price - level) / level <= threshold
+        price = close.iloc[-1]
+        prev_volume = volume.iloc[-2]
+        current_volume = volume.iloc[-1]
+        vol_status = "растёт" if current_volume > prev_volume else "падает"
 
-def get_signal(symbol):
-    klines = get_kline(symbol)
-    if len(klines) < 50:
-        return f"⚪ {symbol.replace('-USDT','')}: Недостаточно данных для анализа"
-    indicators = calculate_indicators(klines)
-    if not indicators:
-        return f"⚪ {symbol.replace('-USDT','')}: Нет данных индикаторов"
-    fib_levels = calculate_fibonacci_levels(indicators["close_series"])
+        fib_min = close.min()
+        fib_max = close.max()
+        fib_0382 = fib_max - (fib_max - fib_min) * 0.382
+        fib_050 = fib_max - (fib_max - fib_min) * 0.5
+        fib_0618 = fib_max - (fib_max - fib_min) * 0.618
 
-    price = indicators["close"]
-    macd = indicators["macd"]
-    macd_signal = indicators["macd_signal"]
-    rsi = indicators["rsi"]
-    wr = indicators["wr"]
-    volume = indicators["volume"]
-    volume_prev = indicators["volume_previous"]
-    ema = indicators["ema"]
-    ema_prev = indicators["ema_previous"]
+        signal = ""
+        emoji = "⚪"
+        tp = round(price + 2 * atr, 4)
+        sl = round(price - 2 * atr, 4)
 
-    vol_up = volume_trending_up(volume, volume_prev)
+        if abs(price - fib_050) / price < 0.003:
+            if macd_line > signal_line and rsi > 38 and wr < -80:
+                signal = f"Лонг от FIB 0.5 ({price})"
+                emoji = "🟢"
+            elif macd_line < signal_line and rsi < 62 and wr > -20:
+                signal = f"Шорт от FIB 0.5 ({price})"
+                emoji = "🔴"
+        elif abs(price - fib_0618) / price < 0.003:
+            if macd_line > signal_line and rsi > 38 and wr < -80:
+                signal = f"Лонг от FIB 0.618 ({price})"
+                emoji = "🟢"
+            elif macd_line < signal_line and rsi < 62 and wr > -20:
+                signal = f"Шорт от FIB 0.618 ({price})"
+                emoji = "🔴"
 
-    # Лонг сигнал - касание уровня Фибо + индикаторы в зоне перепроданности и растущий объём
-    for level_name, level_price in fib_levels.items():
-        if price_touching_level(price, level_price):
-            # Условия для Лонга
-            if (macd > macd_signal and rsi < 40 and wr < -80 and vol_up and ema > ema_prev):
-                tp = round(price * 1.03, 5)
-                sl = round(price * 0.97, 5)
-                msg = (f"🟢 {symbol.replace('-USDT','')}: Лонг от FIB {level_name} (цена {price})\n"
-                       f"TP: {tp}, SL: {sl}\n"
-                       f"MACD: {macd:.5f} > {macd_signal:.5f}\n"
-                       f"RSI: {rsi:.1f} | WR: {wr:.1f}\n"
-                       f"Объём: {'растёт' if vol_up else 'падает'}")
-                return msg
-            # Условия для Шорта
-            if (macd < macd_signal and rsi > 60 and wr > -20 and vol_up and ema < ema_prev):
-                tp = round(price * 0.97, 5)
-                sl = round(price * 1.03, 5)
-                msg = (f"🔴 {symbol.replace('-USDT','')}: Шорт от FIB {level_name} (цена {price})\n"
-                       f"TP: {tp}, SL: {sl}\n"
-                       f"MACD: {macd:.5f} < {macd_signal:.5f}\n"
-                       f"RSI: {rsi:.1f} | WR: {wr:.1f}\n"
-                       f"Объём: {'растёт' if vol_up else 'падает'}")
-                return msg
+        message = f"{emoji} {symbol.split('-')[0]}: {signal if signal else 'Пока нет сигнала'}"
+        if signal:
+            message += f"\nTP: {tp}, SL: {sl}"
+        message += f"\nMACD: {round(macd_line, 4)} {'>' if macd_line > signal_line else '<'} {round(signal_line, 4)}"
+        message += f"\nRSI: {round(rsi, 2)} | WR: {round(wr, 2)}"
+        message += f"\nОбъём: {vol_status}"
 
-    # Если сигналов нет — просто показать текущую цену
-    return (f"⚪ {symbol.replace('-USDT','')}: Пока нет сигнала. Цена: {price}")
+        send_telegram_message(message)
 
-def send_telegram_message(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown"
-    }
-    try:
-        response = requests.post(url, data=payload)
-        if not response.ok:
-            print(f"Ошибка отправки Telegram-сообщения: {response.text}")
-    except Exception as e:
-        print(f"Ошибка запроса к Telegram API: {e}")
+scheduler = BackgroundScheduler()
+scheduler.add_job(analyze, 'interval', minutes=5)
+scheduler.start()
 
-def job():
-    for symbol in symbols:
-        msg = get_signal(symbol)
-        send_telegram_message(msg)
-
-@app.route("/")
+@app.route('/')
 def index():
-    return "CryptoFTW Bot is running."
+    return "Crypto Signal Bot is running."
 
-if __name__ == "__main__":
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(job, 'interval', minutes=5)
-    scheduler.start()
-    # Запускаем первый запуск сразу
-    job()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+if __name__ == '__main__':
+    app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
