@@ -2,6 +2,7 @@ import os
 import time
 import hmac
 import hashlib
+import threading
 import requests
 import json
 import pandas as pd
@@ -11,8 +12,8 @@ from flask import Flask
 
 API_KEY = os.getenv("BINGX_API_KEY")
 API_SECRET = os.getenv("BINGX_API_SECRET")
-TELEGRAM_TOKEN = "8031738383:AAE3zxHvhSFhbTESh0dxEPaoODCrPnuOIxw"
-TELEGRAM_CHAT_ID = "557172438"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")  # Лучше тоже хранить в переменных окружения
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # Аналогично
 
 symbols = ["BTC-USDT", "TIA-USDT", "PEOPLE-USDT", "POPCAT-USDT", "DOGE-USDT"]
 base_url = "https://open-api.bingx.com"
@@ -43,19 +44,13 @@ def get_kline(symbol, interval="1m", limit=200):
         response_data = res.json()
         if 'data' in response_data and response_data['data']:
             return response_data['data']
-        else:
-            return []
-    except Exception:
-        return []
+    except Exception as e:
+        send_telegram_message(f"Ошибка при получении свечей {symbol}: {e}")
+    return []
 
 def calculate_indicators(klines):
     df = pd.DataFrame(klines)
-    df["close"] = df["close"].astype(float)
-    df["open"] = df["open"].astype(float)
-    df["high"] = df["high"].astype(float)
-    df["low"] = df["low"].astype(float)
-    df["volume"] = df["volume"].astype(float)
-    df.dropna(inplace=True)
+    df[["open", "high", "low", "close", "volume"]] = df[["open", "high", "low", "close", "volume"]].astype(float)
 
     if len(df) < 50:
         return None
@@ -64,81 +59,72 @@ def calculate_indicators(klines):
         macd = ta.macd(df["close"], fast=12, slow=26, signal=9).dropna()
         rsi = ta.rsi(df["close"], length=14).dropna()
         ema = ta.ema(df["close"], length=21).dropna()
-        bbands = ta.bbands(df["close"], length=20, std=2).dropna()
-        stoch = ta.stoch(df["high"], df["low"], df["close"], fastk=14, slowk=3, slowd=3).dropna()
         wr = ta.willr(df["high"], df["low"], df["close"], length=14).dropna()
-
-        high_max = df["high"].tail(50).max()
-        low_min = df["low"].tail(50).min()
-        last_close = df["close"].iloc[-1]
-
-        fib_0_382 = low_min + 0.382 * (high_max - low_min)
-        fib_0_5 = low_min + 0.5 * (high_max - low_min)
-        fib_0_618 = low_min + 0.618 * (high_max - low_min)
-
         atr = ta.atr(df["high"], df["low"], df["close"], length=14).dropna()
+
+        fibo_618 = df["close"].iloc[-1] * 0.618
+        fibo_5 = df["close"].iloc[-1] * 0.5
+        fibo_382 = df["close"].iloc[-1] * 0.382
 
         return {
             "macd": macd["MACD_12_26_9"].iloc[-1],
             "macd_signal": macd["MACDs_12_26_9"].iloc[-1],
             "rsi": rsi.iloc[-1],
-            "ema": ema.iloc[-1],
-            "ema_previous": ema.iloc[-2] if len(ema) > 1 else ema.iloc[-1],
-            "upperband": bbands["BBU_20_2.0"].iloc[-1],
-            "lowerband": bbands["BBL_20_2.0"].iloc[-1],
-            "slowk": stoch["STOCHk_14_3_3"].iloc[-1],
-            "slowd": stoch["STOCHd_14_3_3"].iloc[-1],
             "wr": wr.iloc[-1],
+            "ema": ema.iloc[-1],
+            "ema_prev": ema.iloc[-2] if len(ema) > 1 else ema.iloc[-1],
             "volume": df["volume"].iloc[-1],
-            "volume_previous": df["volume"].iloc[-2] if len(df) > 1 else df["volume"].iloc[-1],
-            "fib_levels": (fib_0_382, fib_0_5, fib_0_618),
-            "last_close": last_close,
-            "atr": atr.iloc[-1]
+            "volume_prev": df["volume"].iloc[-2] if len(df) > 1 else df["volume"].iloc[-1],
+            "atr": atr.iloc[-1],
+            "price": df["close"].iloc[-1],
+            "fibo_618": fibo_618,
+            "fibo_5": fibo_5,
+            "fibo_382": fibo_382
         }
-    except Exception:
+    except Exception as e:
+        send_telegram_message(f"Ошибка в расчете индикаторов: {e}")
         return None
 
 def get_signal(symbol):
     klines = get_kline(symbol)
-    if len(klines) >= 50:
-        ind = calculate_indicators(klines)
-        if not ind:
-            return f"⚠️ {symbol.replace('-USDT','')}: Недостаточно данных"
+    if not klines or len(klines) < 50:
+        return f"⚠️ {symbol.replace('-USDT','')}: Недостаточно данных"
 
-        signal_details = (
-            f"{symbol}: MACD={round(ind['macd'],3)} vs Signal={round(ind['macd_signal'],3)}, "
-            f"RSI={round(ind['rsi'],1)}, WR={round(ind['wr'],1)}, Vol={round(ind['volume'],1)} vs Prev={round(ind['volume_previous'],1)}, "
-            f"EMA={round(ind['ema'],3)} vs Prev EMA={round(ind['ema_previous'],3)}, Close={round(ind['last_close'],3)}"
-        )
+    indicators = calculate_indicators(klines)
+    if not indicators:
+        return f"⚠️ {symbol.replace('-USDT','')}: Ошибка индикаторов"
 
-        # Лонг
-        if (
-            ind["macd"] > ind["macd_signal"] and
-            40 < ind["rsi"] < 60 and
-            ind["wr"] < -80 and
-            ind["volume"] > ind["volume_previous"] and
-            ind["last_close"] > ind["fib_levels"][1] and
-            ind["ema"] > ind["ema_previous"]
-        ):
-            tp = round(ind["last_close"] + ind["atr"] * 1.5, 5)
-            sl = round(ind["last_close"] - ind["atr"] * 1.0, 5)
-            return f"🔵 {symbol.replace('-USDT','')}: Лонг\nTP: {tp}, SL: {sl}\n{signal_details}"
+    debug = f"[DEBUG] {symbol}\nЦена: {indicators['price']}\nEMA: {indicators['ema']:.4f} (пред: {indicators['ema_prev']:.4f})\nMACD: {indicators['macd']:.4f}, сигн: {indicators['macd_signal']:.4f}\nRSI: {indicators['rsi']:.2f}\nWR: {indicators['wr']:.2f}\nОбъем: {indicators['volume']} (пред: {indicators['volume_prev']})\nATR: {indicators['atr']:.4f}\nFIBO: 0.382={indicators['fibo_382']:.4f}, 0.5={indicators['fibo_5']:.4f}, 0.618={indicators['fibo_618']:.4f}"
 
-        # Шорт
-        elif (
-            ind["macd"] < ind["macd_signal"] and
-            40 < ind["rsi"] < 60 and
-            ind["wr"] > -20 and
-            ind["volume"] > ind["volume_previous"] and
-            ind["last_close"] < ind["fib_levels"][1] and
-            ind["ema"] < ind["ema_previous"]
-        ):
-            tp = round(ind["last_close"] - ind["atr"] * 1.5, 5)
-            sl = round(ind["last_close"] + ind["atr"] * 1.0, 5)
-            return f"🔴 {symbol.replace('-USDT','')}: Шорт\nTP: {tp}, SL: {sl}\n{signal_details}"
+    send_telegram_message(debug)
 
-        return f"⚪ {symbol.replace('-USDT','')}: Нет сигнала\n{signal_details}"
-    return f"⚠️ {symbol.replace('-USDT','')}: Нет данных"
+    long_conditions = (
+        indicators["macd"] > indicators["macd_signal"]
+        and indicators["rsi"] < 50
+        and indicators["wr"] < -80
+        and indicators["volume"] > indicators["volume_prev"]
+        and indicators["price"] > indicators["ema"]
+    )
+
+    short_conditions = (
+        indicators["macd"] < indicators["macd_signal"]
+        and indicators["rsi"] > 60
+        and indicators["wr"] > -20
+        and indicators["volume"] > indicators["volume_prev"]
+        and indicators["price"] < indicators["ema"]
+    )
+
+    if long_conditions:
+        tp = indicators["price"] + 1.5 * indicators["atr"]
+        sl = indicators["price"] - 1 * indicators["atr"]
+        return f"🔵 ЛОНГ {symbol.replace('-USDT','')}\nВход: {indicators['price']:.4f}\nTP: {tp:.4f}, SL: {sl:.4f}"
+
+    elif short_conditions:
+        tp = indicators["price"] - 1.5 * indicators["atr"]
+        sl = indicators["price"] + 1 * indicators["atr"]
+        return f"🔴 ШОРТ {symbol.replace('-USDT','')}\nВход: {indicators['price']:.4f}\nTP: {tp:.4f}, SL: {sl:.4f}"
+
+    return f"⚪ {symbol.replace('-USDT','')}: Пока нет сигнала"
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -147,7 +133,10 @@ def send_telegram_message(message):
         "text": message,
         "parse_mode": "Markdown"
     }
-    requests.post(url, data=payload)
+    try:
+        requests.post(url, data=payload)
+    except Exception as e:
+        print(f"Ошибка отправки сообщения в Telegram: {e}")
 
 def check_signals():
     for symbol in symbols:
@@ -155,13 +144,13 @@ def check_signals():
         send_telegram_message(signal)
 
 def send_status_update():
-    status_message = "Я работаю, мой господин. Текущие цены:\n"
+    status = "Бот работает. Текущие цены:\n"
     for symbol in symbols:
         klines = get_kline(symbol)
         if klines:
             last_price = klines[-1]["close"]
-            status_message += f"{symbol.replace('-USDT','')}: {last_price}\n"
-    send_telegram_message(status_message)
+            status += f"{symbol.replace('-USDT','')}: {last_price}\n"
+    send_telegram_message(status)
 
 def start_bot():
     global bot_started
@@ -170,10 +159,14 @@ def start_bot():
         check_signals()
         send_status_update()
         while True:
-            time.sleep(30 * 60)
+            time.sleep(30 * 60)  # каждые 30 минут
             check_signals()
             send_status_update()
 
+@app.route("/")
+def home():
+    return "Bot is running!", 200
+
 if __name__ == "__main__":
-    start_bot()
-    
+    threading.Thread(target=start_bot).start()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
