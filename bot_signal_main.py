@@ -95,6 +95,7 @@ def get_signal(symbol):
 
     price = indicators["price"]
     ema = indicators["ema"]
+    ema_prev = indicators["ema_prev"]
     macd = indicators["macd"]
     macd_signal = indicators["macd_signal"]
     rsi = indicators["rsi"]
@@ -103,21 +104,58 @@ def get_signal(symbol):
     volume_prev = indicators["volume_prev"]
     atr = indicators["atr"]
 
-    trend = "восходящий" if price > ema else "нисходящий"
+    # Определяем тренд по EMA и его направлению
+    if price > ema:
+        trend = "восходящий"
+    else:
+        trend = "нисходящий"
+
+    # Дополнительно смотрим, растёт EMA или падает
+    ema_trend = "растёт" if ema > ema_prev else "снижается"
+
+    # Объёмы: растут или падают
     volume_trend = "растут" if volume > volume_prev else "снижаются"
-    fibo_zone = ""
+
+    # MACD сигнал
+    if macd > macd_signal:
+        macd_trend = "бычий импульс"
+    elif macd < macd_signal:
+        macd_trend = "медвежий импульс"
+    else:
+        macd_trend = "нейтральный импульс"
+
+    # RSI — зоны
+    if rsi > 70:
+        rsi_zone = "перекупленность"
+    elif rsi < 30:
+        rsi_zone = "перепроданность"
+    else:
+        rsi_zone = "нейтральная зона"
+
+    # WR — зоны
+    if wr > -20:
+        wr_zone = "перекупленность"
+    elif wr < -80:
+        wr_zone = "перепроданность"
+    else:
+        wr_zone = "нейтральная зона"
+
+    # Фибо зона
     if price > indicators["fibo_5"]:
-        fibo_zone = "Цена выше 0.5 по Фибо — потенциал роста."
-    elif price < indicators["fibo_5"]:
-        fibo_zone = "Цена ниже 0.5 по Фибо — давление продавцов."
+        fibo_zone = "Цена выше уровня 0.5 по Фибоначчи — возможен потенциал роста."
+    else:
+        fibo_zone = "Цена ниже уровня 0.5 по Фибоначчи — возможно давление продавцов."
 
     msg = f"Монета *{symbol.replace('-USDT','')}*\n"
-    msg += f"Цена: {price:.4f} USDT\n"
-    msg += f"Тренд: {trend}, Объёмы {volume_trend}\n"
-    msg += f"MACD: {macd:.4f}, сигнал: {macd_signal:.4f}\n"
-    msg += f"RSI: {rsi:.2f}, WR: {wr:.2f}\n"
+    msg += f"Текущая цена: {price:.4f} USDT\n"
+    msg += f"Тренд: {trend} (EMA 21 {ema_trend})\n"
+    msg += f"Объёмы {volume_trend}, что говорит о {'возрастающем интересе' if volume > volume_prev else 'снижении активности'}\n"
+    msg += f"MACD: {macd:.4f} ({macd_trend})\n"
+    msg += f"RSI: {rsi:.2f} ({rsi_zone})\n"
+    msg += f"Williams %R: {wr:.2f} ({wr_zone})\n"
     msg += f"{fibo_zone}\n"
 
+    # Условия на вход в лонг
     long_conditions = (
         macd > macd_signal
         and rsi < 50
@@ -126,6 +164,7 @@ def get_signal(symbol):
         and price > ema
     )
 
+    # Условия на вход в шорт
     short_conditions = (
         macd < macd_signal
         and rsi > 60
@@ -138,17 +177,21 @@ def get_signal(symbol):
         tp = price + 1.5 * atr
         sl = price - 1 * atr
         msg += "\n*Сигнал на вход в ЛОНГ:*\n"
-        msg += f"Вход от {price:.4f}, TP: {tp:.4f}, SL: {sl:.4f}"
+        msg += f"Рекомендуется вход от {price:.4f} USDT\n"
+        msg += f"Цель (TP): {tp:.4f} USDT, Стоп-лосс (SL): {sl:.4f} USDT\n"
+        msg += "Обратите внимание на подтверждающие сигналы объёмов и тренда."
         return msg
 
     elif short_conditions:
         tp = price - 1.5 * atr
         sl = price + 1 * atr
         msg += "\n*Сигнал на вход в ШОРТ:*\n"
-        msg += f"Вход от {price:.4f}, TP: {tp:.4f}, SL: {sl:.4f}"
+        msg += f"Рекомендуется вход от {price:.4f} USDT\n"
+        msg += f"Цель (TP): {tp:.4f} USDT, Стоп-лосс (SL): {sl:.4f} USDT\n"
+        msg += "Обратите внимание на подтверждающие сигналы объёмов и тренда."
         return msg
 
-    msg += "\nСигналов на вход пока нет."
+    msg += "\nПока чётких сигналов на вход нет. Рекомендуется наблюдать за динамикой индикаторов и объёмов."
     return msg
 
 def send_telegram_message(message):
