@@ -2,25 +2,24 @@ import os
 import time
 import hmac
 import hashlib
-import threading
 import requests
 import json
 import pandas as pd
 import pandas_ta as ta
 from urllib.parse import urlencode
 from flask import Flask
+from apscheduler.schedulers.background import BackgroundScheduler
 
 API_KEY = os.getenv("BINGX_API_KEY")
 API_SECRET = os.getenv("BINGX_API_SECRET")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")  # Лучше тоже хранить в переменных окружения
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # Аналогично
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 symbols = ["BTC-USDT", "TIA-USDT", "PEOPLE-USDT", "POPCAT-USDT", "DOGE-USDT"]
 base_url = "https://open-api.bingx.com"
 headers = {"X-BX-APIKEY": API_KEY}
 
 app = Flask(__name__)
-bot_started = False
 
 def sign_request(params):
     query = '&'.join(f"{k}={v}" for k, v in sorted(params.items()))
@@ -28,7 +27,7 @@ def sign_request(params):
     params["signature"] = signature
     return params
 
-def get_kline(symbol, interval="1m", limit=200):
+def get_kline(symbol, interval="1m", limit=100):
     path = '/openApi/swap/v3/quote/klines'
     params = {
         "symbol": symbol,
@@ -44,87 +43,113 @@ def get_kline(symbol, interval="1m", limit=200):
         response_data = res.json()
         if 'data' in response_data and response_data['data']:
             return response_data['data']
+        else:
+            return []
     except Exception as e:
-        send_telegram_message(f"Ошибка при получении свечей {symbol}: {e}")
-    return []
+        send_telegram_message(f"❗Ошибка получения данных {symbol}: {e}")
+        return []
 
 def calculate_indicators(klines):
     df = pd.DataFrame(klines)
-    df[["open", "high", "low", "close", "volume"]] = df[["open", "high", "low", "close", "volume"]].astype(float)
-
+    if df.empty:
+        return None
+    for col in ["close", "open", "high", "low", "volume"]:
+        df[col] = df[col].astype(float)
+    df.dropna(inplace=True)
     if len(df) < 50:
         return None
-
     try:
         macd = ta.macd(df["close"], fast=12, slow=26, signal=9).dropna()
         rsi = ta.rsi(df["close"], length=14).dropna()
         ema = ta.ema(df["close"], length=21).dropna()
-        wr = ta.willr(df["high"], df["low"], df["close"], length=14).dropna()
-        atr = ta.atr(df["high"], df["low"], df["close"], length=14).dropna()
+        wr = ta.wr(df["high"], df["low"], df["close"], length=14).dropna()
+        volume = df["volume"]
+        close = df["close"]
 
-        fibo_618 = df["close"].iloc[-1] * 0.618
-        fibo_5 = df["close"].iloc[-1] * 0.5
-        fibo_382 = df["close"].iloc[-1] * 0.382
-
+        # Последние значения индикаторов
         return {
             "macd": macd["MACD_12_26_9"].iloc[-1],
             "macd_signal": macd["MACDs_12_26_9"].iloc[-1],
             "rsi": rsi.iloc[-1],
-            "wr": wr.iloc[-1],
             "ema": ema.iloc[-1],
-            "ema_prev": ema.iloc[-2] if len(ema) > 1 else ema.iloc[-1],
-            "volume": df["volume"].iloc[-1],
-            "volume_prev": df["volume"].iloc[-2] if len(df) > 1 else df["volume"].iloc[-1],
-            "atr": atr.iloc[-1],
-            "price": df["close"].iloc[-1],
-            "fibo_618": fibo_618,
-            "fibo_5": fibo_5,
-            "fibo_382": fibo_382
+            "ema_previous": ema.iloc[-2] if len(ema) > 1 else ema.iloc[-1],
+            "wr": wr.iloc[-1],
+            "wr_previous": wr.iloc[-2] if len(wr) > 1 else wr.iloc[-1],
+            "volume": volume.iloc[-1],
+            "volume_previous": volume.iloc[-2] if len(volume) > 1 else volume.iloc[-1],
+            "close": close.iloc[-1],
+            "close_previous": close.iloc[-2] if len(close) > 1 else close.iloc[-1],
+            "close_series": close
         }
     except Exception as e:
-        send_telegram_message(f"Ошибка в расчете индикаторов: {e}")
+        send_telegram_message(f"❗Ошибка расчёта индикаторов: {e}")
         return None
+
+def calculate_fibonacci_levels(close_series):
+    max_price = close_series.max()
+    min_price = close_series.min()
+    diff = max_price - min_price
+    levels = {
+        "0.382": round(max_price - 0.382 * diff, 5),
+        "0.5": round(max_price - 0.5 * diff, 5),
+        "0.618": round(max_price - 0.618 * diff, 5),
+    }
+    return levels
+
+def volume_trending_up(volume, volume_previous):
+    return volume > volume_previous
+
+def price_touching_level(price, level, threshold=0.002):
+    # цена касается уровня если разница менее 0.2%
+    return abs(price - level) / level <= threshold
 
 def get_signal(symbol):
     klines = get_kline(symbol)
-    if not klines or len(klines) < 50:
-        return f"⚠️ {symbol.replace('-USDT','')}: Недостаточно данных"
-
+    if len(klines) < 50:
+        return f"⚪ {symbol.replace('-USDT','')}: Недостаточно данных для анализа"
     indicators = calculate_indicators(klines)
     if not indicators:
-        return f"⚠️ {symbol.replace('-USDT','')}: Ошибка индикаторов"
+        return f"⚪ {symbol.replace('-USDT','')}: Нет данных индикаторов"
+    fib_levels = calculate_fibonacci_levels(indicators["close_series"])
 
-    debug = f"[DEBUG] {symbol}\nЦена: {indicators['price']}\nEMA: {indicators['ema']:.4f} (пред: {indicators['ema_prev']:.4f})\nMACD: {indicators['macd']:.4f}, сигн: {indicators['macd_signal']:.4f}\nRSI: {indicators['rsi']:.2f}\nWR: {indicators['wr']:.2f}\nОбъем: {indicators['volume']} (пред: {indicators['volume_prev']})\nATR: {indicators['atr']:.4f}\nFIBO: 0.382={indicators['fibo_382']:.4f}, 0.5={indicators['fibo_5']:.4f}, 0.618={indicators['fibo_618']:.4f}"
+    price = indicators["close"]
+    macd = indicators["macd"]
+    macd_signal = indicators["macd_signal"]
+    rsi = indicators["rsi"]
+    wr = indicators["wr"]
+    volume = indicators["volume"]
+    volume_prev = indicators["volume_previous"]
+    ema = indicators["ema"]
+    ema_prev = indicators["ema_previous"]
 
-    send_telegram_message(debug)
+    vol_up = volume_trending_up(volume, volume_prev)
 
-    long_conditions = (
-        indicators["macd"] > indicators["macd_signal"]
-        and indicators["rsi"] < 50
-        and indicators["wr"] < -80
-        and indicators["volume"] > indicators["volume_prev"]
-        and indicators["price"] > indicators["ema"]
-    )
+    # Лонг сигнал - касание уровня Фибо + индикаторы в зоне перепроданности и растущий объём
+    for level_name, level_price in fib_levels.items():
+        if price_touching_level(price, level_price):
+            # Условия для Лонга
+            if (macd > macd_signal and rsi < 40 and wr < -80 and vol_up and ema > ema_prev):
+                tp = round(price * 1.03, 5)
+                sl = round(price * 0.97, 5)
+                msg = (f"🟢 {symbol.replace('-USDT','')}: Лонг от FIB {level_name} (цена {price})\n"
+                       f"TP: {tp}, SL: {sl}\n"
+                       f"MACD: {macd:.5f} > {macd_signal:.5f}\n"
+                       f"RSI: {rsi:.1f} | WR: {wr:.1f}\n"
+                       f"Объём: {'растёт' if vol_up else 'падает'}")
+                return msg
+            # Условия для Шорта
+            if (macd < macd_signal and rsi > 60 and wr > -20 and vol_up and ema < ema_prev):
+                tp = round(price * 0.97, 5)
+                sl = round(price * 1.03, 5)
+                msg = (f"🔴 {symbol.replace('-USDT','')}: Шорт от FIB {level_name} (цена {price})\n"
+                       f"TP: {tp}, SL: {sl}\n"
+                       f"MACD: {macd:.5f} < {macd_signal:.5f}\n"
+                       f"RSI: {rsi:.1f} | WR: {wr:.1f}\n"
+                       f"Объём: {'растёт' if vol_up else 'падает'}")
+                return msg
 
-    short_conditions = (
-        indicators["macd"] < indicators["macd_signal"]
-        and indicators["rsi"] > 60
-        and indicators["wr"] > -20
-        and indicators["volume"] > indicators["volume_prev"]
-        and indicators["price"] < indicators["ema"]
-    )
-
-    if long_conditions:
-        tp = indicators["price"] + 1.5 * indicators["atr"]
-        sl = indicators["price"] - 1 * indicators["atr"]
-        return f"🔵 ЛОНГ {symbol.replace('-USDT','')}\nВход: {indicators['price']:.4f}\nTP: {tp:.4f}, SL: {sl:.4f}"
-
-    elif short_conditions:
-        tp = indicators["price"] - 1.5 * indicators["atr"]
-        sl = indicators["price"] + 1 * indicators["atr"]
-        return f"🔴 ШОРТ {symbol.replace('-USDT','')}\nВход: {indicators['price']:.4f}\nTP: {tp:.4f}, SL: {sl:.4f}"
-
-    return f"⚪ {symbol.replace('-USDT','')}: Пока нет сигнала"
+    # Если сигналов нет — просто показать текущую цену
+    return (f"⚪ {symbol.replace('-USDT','')}: Пока нет сигнала. Цена: {price}")
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -134,39 +159,25 @@ def send_telegram_message(message):
         "parse_mode": "Markdown"
     }
     try:
-        requests.post(url, data=payload)
+        response = requests.post(url, data=payload)
+        if not response.ok:
+            print(f"Ошибка отправки Telegram-сообщения: {response.text}")
     except Exception as e:
-        print(f"Ошибка отправки сообщения в Telegram: {e}")
+        print(f"Ошибка запроса к Telegram API: {e}")
 
-def check_signals():
+def job():
     for symbol in symbols:
-        signal = get_signal(symbol)
-        send_telegram_message(signal)
-
-def send_status_update():
-    status = "Бот работает. Текущие цены:\n"
-    for symbol in symbols:
-        klines = get_kline(symbol)
-        if klines:
-            last_price = klines[-1]["close"]
-            status += f"{symbol.replace('-USDT','')}: {last_price}\n"
-    send_telegram_message(status)
-
-def start_bot():
-    global bot_started
-    if not bot_started:
-        bot_started = True
-        check_signals()
-        send_status_update()
-        while True:
-            time.sleep(30 * 60)  # каждые 30 минут
-            check_signals()
-            send_status_update()
+        msg = get_signal(symbol)
+        send_telegram_message(msg)
 
 @app.route("/")
-def home():
-    return "Bot is running!", 200
+def index():
+    return "CryptoFTW Bot is running."
 
 if __name__ == "__main__":
-    threading.Thread(target=start_bot).start()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(job, 'interval', minutes=5)
+    scheduler.start()
+    # Запускаем первый запуск сразу
+    job()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
