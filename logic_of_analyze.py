@@ -27,9 +27,9 @@ def get_kline(symbol, interval, limit, api_secret, headers, base_url):
         if response.status_code == 200:
             return response.json().get("data", [])
         else:
-            send_telegram_message(f"Ошибка API {response.status_code}: {response.text}", telegram_token, telegram_chat_id)
+            print(f"Error: {response.status_code} - {response.text}")
     except Exception as e:
-        send_telegram_message(f"Исключение при получении данных {symbol} ({interval}): {e}", telegram_token, telegram_chat_id)
+        print(f"Exception fetching kline for {symbol} ({interval}): {e}")
     return []
 
 def calculate_bollinger_bands(df, length=20, std_dev=2):
@@ -41,74 +41,33 @@ def calculate_bollinger_bands(df, length=20, std_dev=2):
 
 def detect_candle_pattern(df):
     if len(df) < 2:
-        return "", ""
+        return ""
 
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
     body_last = abs(last["close"] - last["open"])
     body_prev = abs(prev["close"] - prev["open"])
-    candle_range = last["high"] - last["low"]
 
-    # Паттерны и рекомендации
+    # Бычье поглощение
     if (last["close"] > last["open"] and prev["close"] < prev["open"] and
         last["close"] > prev["open"] and last["open"] < prev["close"]):
-        desc = ("Бычье поглощение — сигнал к потенциальному развороту вверх. "
-                "Рекомендуется рассматривать вход в лонг.")
-        return "Паттерн: бычье поглощение", desc
+        return "Паттерн: бычье поглощение"
 
+    # Медвежье поглощение
     if (last["close"] < last["open"] and prev["close"] > prev["open"] and
         last["open"] > prev["close"] and last["close"] < prev["open"]):
-        desc = ("Медвежье поглощение — сигнал к потенциальному развороту вниз. "
-                "Рекомендуется рассматривать вход в шорт.")
-        return "Паттерн: медвежье поглощение", desc
+        return "Паттерн: медвежье поглощение"
 
-    if body_last < candle_range * 0.3 and (last["close"] - last["low"]) < body_last * 0.2:
-        desc = ("Молот — возможный разворот от уровня поддержки. "
-                "Можно рассматривать лонг с подтверждающими индикаторами.")
-        return "Паттерн: молот", desc
+    # Молот
+    if body_last < (last["high"] - last["low"]) * 0.3 and (last["close"] - last["low"]) < body_last * 0.2:
+        return "Паттерн: молот"
 
-    if body_last < candle_range * 0.1:
-        desc = ("Доджи — неопределённость на рынке. Рекомендуется ждать подтверждения тренда "
-                "перед открытием позиций.")
-        return "Паттерн: доджи", desc
+    # Доджи
+    if body_last < (last["high"] - last["low"]) * 0.1:
+        return "Паттерн: доджи"
 
-    # Добавим еще паттерны:
-
-    # Поглощение "Харами"
-    if (prev["close"] < prev["open"] and 
-        last["close"] > last["open"] and 
-        last["open"] > prev["close"] and 
-        last["close"] < prev["open"]):
-        desc = ("Бычий харами — возможный разворот вверх, но слабее, чем обычное поглощение. "
-                "Можно рассматривать лонг при подтверждении.")
-        return "Паттерн: бычий харами", desc
-
-    if (prev["close"] > prev["open"] and 
-        last["close"] < last["open"] and 
-        last["open"] < prev["close"] and 
-        last["close"] > prev["open"]):
-        desc = ("Медвежий харами — возможный разворот вниз, слабый сигнал. "
-                "Ждите подтверждения перед шортом.")
-        return "Паттерн: медвежий харами", desc
-
-    # Вечерняя звезда
-    if (prev["close"] > prev["open"] and 
-        last["close"] < last["open"] and 
-        body_last > body_prev * 1.5):
-        desc = ("Вечерняя звезда — сильный сигнал разворота вниз. "
-                "Рассматривайте шорт при подтверждении.")
-        return "Паттерн: вечерняя звезда", desc
-
-    # Утренняя звезда
-    if (prev["close"] < prev["open"] and 
-        last["close"] > last["open"] and 
-        body_last > body_prev * 1.5):
-        desc = ("Утренняя звезда — сильный сигнал разворота вверх. "
-                "Рассматривайте лонг при подтверждении.")
-        return "Паттерн: утренняя звезда", desc
-
-    return "", ""
+    return ""
 
 def calculate_indicators(df):
     if df.empty or len(df) < 35:
@@ -148,7 +107,7 @@ def calculate_indicators(df):
     trend = "восходящий" if price > ema21 else "нисходящий"
     volume_trend = "растут" if volume_now > volume_prev else "падают"
 
-    candle_pattern, pattern_desc = detect_candle_pattern(df)
+    candle_pattern = detect_candle_pattern(df)
 
     signal = "Ожидание"
     if wr < -80 and macd_val > signal_val and 40 < rsi < 60 and trend == "восходящий" and volume_trend == "растут":
@@ -171,7 +130,6 @@ def calculate_indicators(df):
         "volume_prev": volume_prev,
         "volume_trend": volume_trend,
         "candle_pattern": candle_pattern,
-        "pattern_desc": pattern_desc,
         "signal": signal,
         "bb_upper": upper_band,
         "bb_lower": lower_band
@@ -203,4 +161,49 @@ def send_telegram_message(message, telegram_token, telegram_chat_id):
     try:
         response = requests.post(url, data=data)
         if response.status_code != 200:
-            print(f"Ошибка отправки сообщения: {response.status_code} - {response
+            print(f"Ошибка отправки сообщения: {response.status_code} - {response.text}")
+    except Exception as e:
+        print(f"Ошибка Telegram: {e}")
+
+def analyze(symbols, api_secret, headers, telegram_token, telegram_chat_id, base_url):
+    intervals = {
+        "1m": "ТФ 1m",
+        "5m": "ТФ 5m",
+        "15m": "ТФ 15m",
+        "1h": "ТФ 1h"
+    }
+
+    for symbol in symbols:
+        message = f"📊 Сигналы по монете <b>{symbol}</b> ({datetime.utcnow().strftime('%H:%M:%S UTC')}):\n\n"
+        has_data = False
+
+        for interval, label in intervals.items():
+            klines = get_kline(symbol, interval, 100, api_secret, headers, base_url)
+            if not klines:
+                continue
+
+            df = pd.DataFrame(klines)
+            indicators = calculate_indicators(df)
+            if not indicators:
+                continue
+
+            stop_loss, take_profit = calculate_stop_take(indicators["price"], indicators["atr"], indicators["signal"])
+
+            tf_message = (
+                f"{label}:\n"
+                f"Цена: {indicators['price']:.4f} USDT | EMA(21): {indicators['ema21']:.4f} — тренд {indicators['trend']}\n"
+                f"MACD: {indicators['macd']:.4f} vs сигнальная {indicators['signal_line']:.4f} — "
+                f"{'бычий' if indicators['macd'] > indicators['signal_line'] else 'медвежий'}\n"
+                f"RSI: {indicators['rsi']:.2f} ({'норма' if 30 < indicators['rsi'] < 70 else '⚠️'})\n"
+                f"WR: {indicators['wr']:.2f} ({'перепродан' if indicators['wr'] < -80 else 'перекуплен' if indicators['wr'] > -20 else 'норма'})\n"
+                f"Объём: {indicators['volume_now']:.1f} (до этого {indicators['volume_prev']:.1f}, {indicators['volume_trend']})\n"
+                f"{indicators['candle_pattern']}\n"
+                f"Рекомендация: <b>{indicators['signal']}</b>\n"
+            )
+            if stop_loss and take_profit:
+                tf_message += f"Стоп-лосс: {stop_loss:.4f} | Тейк-профит: {take_profit:.4f}\n"
+            message += tf_message + "\n"
+            has_data = True
+
+        if has_data:
+            send_telegram_message(message, telegram_token, telegram_chat_id)
