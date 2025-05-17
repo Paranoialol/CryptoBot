@@ -7,7 +7,7 @@ import requests
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from your_telegram_module import send_telegram
+
 
 API_KEY = os.getenv("BINGX_API_KEY")
 API_SECRET = os.getenv("BINGX_API_SECRET")
