@@ -1,3 +1,4 @@
+# File: logic_of_analyze.py
 import hmac
 import hashlib
 import requests
@@ -69,26 +70,29 @@ def detect_candle_pattern(df):
 
     return ""
 
-def calculate_indicators(df):
+def calculate_indicators_v2(df):
     if df.empty or len(df) < 35:
         return None
 
+    # Приведение данных к числам
     df["close"] = pd.to_numeric(df["close"], errors="coerce")
     df["open"] = pd.to_numeric(df["open"], errors="coerce")
     df["high"] = pd.to_numeric(df["high"], errors="coerce")
     df["low"] = pd.to_numeric(df["low"], errors="coerce")
     df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
 
+    # Индикаторы
     macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
     df = pd.concat([df, macd], axis=1)
     df["RSI_14"] = ta.rsi(df["close"], length=14)
     df["WR_14"] = ta.willr(df["high"], df["low"], df["close"], length=14)
     df["ATR_14"] = ta.atr(df["high"], df["low"], df["close"], length=14)
     df["EMA_21"] = ta.ema(df["close"], length=21)
+    df["ADX_14"] = ta.adx(df["high"], df["low"], df["close"], length=14)["ADX_14"]
 
-    upper_bb, lower_bb = calculate_bollinger_bands(df, length=20, std_dev=2)
-    df["BB_upper"] = upper_bb
-    df["BB_lower"] = lower_bb
+    # SuperTrend (pandas_ta)
+    st = ta.supertrend(df["high"], df["low"], df["close"], length=10, multiplier=3.0)
+    df = pd.concat([df, st], axis=1)  # добавятся столбцы SUPERT_10_3.0 и SUPERTd_10_3.0
 
     latest = df.iloc[-1]
 
@@ -98,41 +102,74 @@ def calculate_indicators(df):
     wr = latest["WR_14"]
     atr = latest["ATR_14"]
     ema21 = latest["EMA_21"]
+    adx = latest["ADX_14"]
+    supertrend_dir = latest["SUPERTd_10_3.0"]  # 1 - вверх, -1 - вниз, 0 - без тренда
+
     price = latest["close"]
     volume_now = latest["volume"]
     volume_prev = df["volume"].iloc[-2]
-    upper_band = latest["BB_upper"]
-    lower_band = latest["BB_lower"]
-
-    trend = "восходящий" if price > ema21 else "нисходящий"
     volume_trend = "растут" if volume_now > volume_prev else "падают"
+
+    # Оценка по индикаторам (баллы)
+    score = 0
+
+    # MACD
+    if macd_val > signal_val:
+        score += 2
+    else:
+        score -= 2
+
+    # RSI
+    if rsi < 30:
+        score += 1
+    elif rsi > 70:
+        score -= 1
+
+    # Williams %R
+    if wr < -80:
+        score += 1
+    elif wr > -20:
+        score -= 1
+
+    # EMA21
+    if price > ema21:
+        score += 2
+    else:
+        score -= 2
+
+    # ADX
+    if adx > 25:
+        score += 1
+    else:
+        score -= 1
+
+    # SuperTrend
+    if supertrend_dir == 1:
+        score += 2
+    elif supertrend_dir == -1:
+        score -= 2
+
+    # Фильтры по объему и волатильности
+    volume_filter = volume_now > volume_prev * 0.8
+    atr_filter = atr < price * 0.05
 
     candle_pattern = detect_candle_pattern(df)
 
-    signal = "Ожидание"
-    if wr < -80 and macd_val > signal_val and 40 < rsi < 60 and trend == "восходящий" and volume_trend == "растут":
-        if price > upper_band:
-            signal = "Лонг"
-    elif wr > -20 and macd_val < signal_val and rsi > 50 and trend == "нисходящий" and volume_trend == "падают":
-        if price < lower_band:
-            signal = "Шорт"
+    signal = "Лонг" if score > 3 else "Шорт" if score < -3 else "Ожидание"
 
     return {
         "price": price,
-        "ema21": ema21,
-        "trend": trend,
-        "macd": macd_val,
-        "signal_line": signal_val,
-        "rsi": rsi,
-        "wr": wr,
-        "atr": atr,
+        "score": score,
+        "volume_filter": volume_filter,
+        "atr_filter": atr_filter,
+        "signal": signal,
         "volume_now": volume_now,
         "volume_prev": volume_prev,
-        "volume_trend": volume_trend,
-        "candle_pattern": candle_pattern,
-        "signal": signal,
-        "bb_upper": upper_band,
-        "bb_lower": lower_band
+        "atr": atr,
+        "ema21": ema21,
+        "adx": adx,
+        "supertrend_dir": supertrend_dir,
+        "candle_pattern": candle_pattern
     }
 
 def calculate_stop_take(price, atr, signal):
@@ -167,43 +204,63 @@ def send_telegram_message(message, telegram_token, telegram_chat_id):
 
 def analyze(symbols, api_secret, headers, telegram_token, telegram_chat_id, base_url):
     intervals = {
-        "1m": "ТФ 1m",
-        "5m": "ТФ 5m",
-        "15m": "ТФ 15m",
-        "1h": "ТФ 1h"
+        "1m": 0.5,
+        "5m": 1.0,
+        "15m": 1.5,
+        "1h": 2.0
     }
 
     for symbol in symbols:
         message = f"📊 Сигналы по монете <b>{symbol}</b> ({datetime.utcnow().strftime('%H:%M:%S UTC')}):\n\n"
-        has_data = False
+        combined_score = 0
+        valid_intervals = 0
 
-        for interval, label in intervals.items():
+        for interval, weight in intervals.items():
             klines = get_kline(symbol, interval, 100, api_secret, headers, base_url)
             if not klines:
                 continue
 
             df = pd.DataFrame(klines)
-            indicators = calculate_indicators(df)
+            indicators = calculate_indicators_v2(df)
             if not indicators:
                 continue
 
+            # Проверяем фильтры по объему и волатильности
+            if not indicators["volume_filter"] or not indicators["atr_filter"]:
+                color = "🔴"
+                tf_signal = "Сигнал отсеян (фильтры)"
+            else:
+                # Светофор по баллам
+                if indicators["score"] >= 5:
+                    color = "🟢"
+                elif 2 <= indicators["score"] < 5:
+                    color = "🟡"
+                else:
+                    color = "🔴"
+                tf_signal = indicators["signal"]
+                combined_score += indicators["score"] * weight
+                valid_intervals += weight
+
             stop_loss, take_profit = calculate_stop_take(indicators["price"], indicators["atr"], indicators["signal"])
 
-            tf_message = (
-                f"{label}:\n"
-                f"Цена: {indicators['price']:.4f} USDT | EMA(21): {indicators['ema21']:.4f} — тренд {indicators['trend']}\n"
-                f"MACD: {indicators['macd']:.4f} vs сигнальная {indicators['signal_line']:.4f} — "
-                f"{'бычий' if indicators['macd'] > indicators['signal_line'] else 'медвежий'}\n"
-                f"RSI: {indicators['rsi']:.2f} ({'норма' if 30 < indicators['rsi'] < 70 else '⚠️'})\n"
-                f"WR: {indicators['wr']:.2f} ({'перепродан' if indicators['wr'] < -80 else 'перекуплен' if indicators['wr'] > -20 else 'норма'})\n"
-                f"Объём: {indicators['volume_now']:.1f} (до этого {indicators['volume_prev']:.1f}, {indicators['volume_trend']})\n"
-                f"{indicators['candle_pattern']}\n"
-                f"Рекомендация: <b>{indicators['signal']}</b>\n"
+            message += (
+                f"{interval} {color}:\n"
+                f"Сигнал: <b>{tf_signal}</b> | Балл: {indicators['score']:.1f}\n"
+                f"Цена: {indicators['price']:.4f} | ATR : {indicators['atr']:.4f} | Объем: {indicators['volume_now']:.1f}\n"
+                f"Паттерн: {indicators['candle_pattern']}\n"
+                f"Стоп-лосс: {stop_loss:.4f} | Тейк-профит: {take_profit:.4f}\n\n"
             )
-            if stop_loss and take_profit:
-                tf_message += f"Стоп-лосс: {stop_loss:.4f} | Тейк-профит: {take_profit:.4f}\n"
-            message += tf_message + "\n"
-            has_data = True
 
-        if has_data:
-            send_telegram_message(message, telegram_token, telegram_chat_id)
+        if valid_intervals == 0:
+            message += "❌ Нет достаточных данных для анализа.\n"
+        else:
+            avg_score = combined_score / valid_intervals
+            if avg_score > 3:
+                overall = "🟢 Общий сигнал: Лонг"
+            elif avg_score < -3:
+                overall = "🔴 Общий сигнал: Шорт"
+            else:
+                overall = "🟡 Общий сигнал: Ожидание"
+            message += f"<b>{overall}</b> (Средний балл: {avg_score:.2f})\n"
+
+        send_telegram_message(message, telegram_token, telegram_chat_id)
