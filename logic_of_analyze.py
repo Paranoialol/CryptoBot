@@ -1,9 +1,23 @@
-import requests
-import pandas as pd
-from datetime import datetime
-from urllib.parse import urlencode
+# File: logic_of_analyze.py
+
 import hmac
 import hashlib
+import requests
+import pandas as pd
+from urllib.parse import urlencode
+from datetime import datetime
+
+def send_debug_telegram(message, telegram_token, telegram_chat_id):
+    url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
+    data = {
+        "chat_id": telegram_chat_id,
+        "text": f"🐞 DEBUG [{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}]:\n{message}",
+        "parse_mode": "HTML"
+    }
+    try:
+        requests.post(url, data=data)
+    except Exception as e:
+        print(f"Ошибка отправки отладки в Telegram: {e}")
 
 def sign_request(params, api_secret):
     query = '&'.join(f"{k}={v}" for k, v in sorted(params.items()))
@@ -26,49 +40,32 @@ def get_kline(symbol, interval, limit, api_secret, headers, base_url):
         if response.status_code == 200:
             return response.json().get("data", [])
         else:
-            print(f"Error: {response.status_code} - {response.text}")
+            return f"Ошибка API: {response.status_code} - {response.text}"
     except Exception as e:
-        print(f"Exception fetching kline for {symbol} ({interval}): {e}")
-    return []
-
-def send_telegram_message(message, telegram_token, telegram_chat_id):
-    url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
-    data = {
-        "chat_id": telegram_chat_id,
-        "text": message,
-        "parse_mode": "HTML"
-    }
-    try:
-        response = requests.post(url, data=data)
-        if response.status_code != 200:
-            print(f"Ошибка отправки сообщения: {response.status_code} - {response.text}")
-    except Exception as e:
-        print(f"Ошибка Telegram: {e}")
+        return f"Исключение при запросе: {e}"
 
 def analyze(symbols, api_secret, headers, telegram_token, telegram_chat_id, base_url):
-    intervals = {
-        "1m": "1",
-        "5m": "5",
-        "15m": "15",
-        "1h": "60"
-    }
+    intervals = ["1m", "5m", "15m", "1h"]
 
     for symbol in symbols:
-        message = f"📊 Данные для <b>{symbol}</b> ({datetime.utcnow().strftime('%H:%M:%S UTC')}):\n\n"
+        message = f"<b>📊 Проверка данных для {symbol}</b>:\n"
+        for interval in intervals:
+            klines = get_kline(symbol, interval, 5, api_secret, headers, base_url)
 
-        for interval_name, interval_val in intervals.items():
-            klines = get_kline(symbol, interval_val, 100, api_secret, headers, base_url)
-
-            if not klines:
-                message += f"{interval_name}: Нет данных.\n\n"
+            if isinstance(klines, str):  # если вернулась ошибка
+                message += f"{interval}: ❌ {klines}\n"
                 continue
 
-            df = pd.DataFrame(klines)
-            df.columns = ["open", "close", "high", "low", "volume", "time"]
+            if not klines:
+                message += f"{interval}: ❌ Нет данных\n"
+                continue
 
-            # Выведем первые 5 строк с ключевыми колонками
-            sample = df.head(5).to_string(index=False)
+            try:
+                df = pd.DataFrame(klines, columns=["open", "close", "high", "low", "volume", "time"])
+                df = df.apply(pd.to_numeric, errors='ignore')
+                first_rows = df.head(3).to_string(index=False)
+                message += f"{interval}: ✅\n<pre>{first_rows}</pre>\n\n"
+            except Exception as e:
+                message += f"{interval}: ⚠️ Ошибка обработки данных: {e}\n"
 
-            message += f"{interval_name} (первые 5 строк):\n{sample}\n\n"
-
-        send_telegram_message(message, telegram_token, telegram_chat_id)
+        send_debug_telegram(message, telegram_token, telegram_chat_id)
