@@ -166,7 +166,6 @@ def analyze_symbol(symbol, api_secret, headers, base_url):
             f"EMA20: {df['EMA20'].iloc[-1]:.5f}\n"
             f"Свеча: Open {df['open'].iloc[-1]:.5f}, Close {df['close'].iloc[-1]:.5f}\n"
             f"Паттерны: " + ("Бычье поглощение, " if bullish else "") + ("Медвежье поглощение, " if bearish else "") + ("Молот, " if hammer else "") + ("Доджи, " if doji else "")).rstrip(", ") + "\n"
-        )
 
         result[tf] = {
             "signal": signal,
