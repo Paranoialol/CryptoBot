@@ -1,71 +1,84 @@
-# File: logic_of_analyze.py
-
+import requests
+import time
 import hmac
 import hashlib
-import requests
-import pandas as pd
 from urllib.parse import urlencode
-from datetime import datetime
+import logging
+import os
 
-def send_debug_telegram(message, telegram_token, telegram_chat_id):
-    url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
-    data = {
-        "chat_id": telegram_chat_id,
-        "text": f"🐞 DEBUG [{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}]:\n{message}",
-        "parse_mode": "HTML"
-    }
+import telegram
+
+# Конфиги из env
+API_KEY = os.getenv('BINGX_API_KEY')
+API_SECRET = os.getenv('BINGX_API_SECRET')
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+
+bot = telegram.Bot(token=TELEGRAM_TOKEN)
+
+BASE_URL = 'https://open-api.bingx.com'
+KLINES_PATH = '/openApi/swap/v3/quote/klines'
+
+# Таймфреймы, которые анализируем
+TIMEFRAMES = ['1m', '5m', '15m', '1h']
+
+def send_telegram_message(text):
     try:
-        requests.post(url, data=data)
+        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text)
     except Exception as e:
-        print(f"Ошибка отправки отладки в Telegram: {e}")
+        print(f"Telegram send error: {e}")
 
-def sign_request(params, api_secret):
-    query = '&'.join(f"{k}={v}" for k, v in sorted(params.items()))
-    signature = hmac.new(api_secret.encode(), query.encode(), hashlib.sha256).hexdigest()
-    params["signature"] = signature
-    return params
+def sign_request(params, secret):
+    query_string = urlencode(sorted(params.items()))
+    signature = hmac.new(secret.encode(), query_string.encode(), hashlib.sha256).hexdigest()
+    return signature
 
-def get_kline(symbol, interval, limit, api_secret, headers, base_url):
-    path = '/openApi/swap/v3/quote/klines'
+def fetch_klines(symbol, interval, limit=100):
+    timestamp = int(time.time() * 1000)
     params = {
-        "symbol": symbol,
-        "interval": interval,
-        "limit": limit,
-        "timestamp": str(int(datetime.utcnow().timestamp() * 1000))
+        'symbol': symbol,
+        'interval': interval,
+        'limit': limit,
+        'timestamp': str(timestamp)
     }
+    params['signature'] = sign_request(params, API_SECRET)
+
+    headers = {
+        'X-BX-APIKEY': API_KEY
+    }
+
     try:
-        signed_params = sign_request(params, api_secret)
-        url = f"{base_url}{path}?{urlencode(signed_params)}"
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            return response.json().get("data", [])
+        response = requests.get(BASE_URL + KLINES_PATH, headers=headers, params=params)
+        response.raise_for_status()
+        data = response.json()
+        if data.get('success', False) or data.get('code') == '00000':  # разные варианты ответа
+            return data.get('data', [])
         else:
-            return f"Ошибка API: {response.status_code} - {response.text}"
+            send_telegram_message(f"❌ Ошибка API для {symbol} {interval}: {data}")
+            return []
     except Exception as e:
-        return f"Исключение при запросе: {e}"
+        send_telegram_message(f"❌ Ошибка запроса данных для {symbol} {interval}: {e}")
+        return []
 
-def analyze(symbols, api_secret, headers, telegram_token, telegram_chat_id, base_url):
-    intervals = ["1m", "5m", "15m", "1h"]
+def analyze_symbol(symbol):
+    debug_text = [f"📊 Проверка данных для {symbol}:"]
+    for tf in TIMEFRAMES:
+        klines = fetch_klines(symbol, tf)
+        if not klines:
+            debug_text.append(f"{tf}: ❌ Нет данных")
+        else:
+            # Отобразим 3 последних свечи в упрощенном виде
+            sample_data = []
+            for k in klines[:3]:
+                sample_data.append(
+                    f"open={k['open']} close={k['close']} high={k['high']} low={k['low']} volume={k['volume']} time={k['time']}"
+                )
+            debug_text.append(f"{tf}: ✅\n  " + "\n  ".join(sample_data))
+    send_telegram_message("\n".join(debug_text))
 
-    for symbol in symbols:
-        message = f"<b>📊 Проверка данных для {symbol}</b>:\n"
-        for interval in intervals:
-            klines = get_kline(symbol, interval, 5, api_secret, headers, base_url)
 
-            if isinstance(klines, str):  # если вернулась ошибка
-                message += f"{interval}: ❌ {klines}\n"
-                continue
-
-            if not klines:
-                message += f"{interval}: ❌ Нет данных\n"
-                continue
-
-            try:
-                df = pd.DataFrame(klines, columns=["open", "close", "high", "low", "volume", "time"])
-                df = df.apply(pd.to_numeric, errors='ignore')
-                first_rows = df.head(3).to_string(index=False)
-                message += f"{interval}: ✅\n<pre>{first_rows}</pre>\n\n"
-            except Exception as e:
-                message += f"{interval}: ⚠️ Ошибка обработки данных: {e}\n"
-
-        send_debug_telegram(message, telegram_token, telegram_chat_id)
+if __name__ == "__main__":
+    symbols = ["BTC-USDT", "TIA-USDT", "PEOPLE-USDT", "POPCAT-USDT", "DOGE-USDT"]
+    for s in symbols:
+        analyze_symbol(s)
+        time.sleep(1)  # пауза, чтобы не забанили по лимитам
